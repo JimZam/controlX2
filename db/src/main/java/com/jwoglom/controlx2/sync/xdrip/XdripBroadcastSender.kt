@@ -60,8 +60,8 @@ class XdripBroadcastSender(
         const val ACTION_EXTERNAL_STATUSLINE = "com.eveningoutpost.dexdrip.ExternalStatusline"
         const val ACTION_NS_EMULATOR = "com.eveningoutpost.dexdrip.NS_EMULATOR"
 
-        /** false = xDrip+ calcula la tendencia; true = se envía la dirección de ControlX2. */
-        private const val NS_EMULATOR_SEND_DIRECTION = false
+        /** true = se envía la flecha calculada por ControlX2 (con las horas reales); false = "NONE". */
+        private const val NS_EMULATOR_SEND_DIRECTION = true
 
         private const val EXTRA_SGVS = XdripSgvPayload.EXTRA_KEY
         private const val EXTRA_DEVICESTATUS = XdripDeviceStatusPayload.EXTRA_KEY
