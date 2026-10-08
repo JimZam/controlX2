@@ -180,39 +180,67 @@ class XdripMessageDispatcher(
                 bolusId = bolusId,
                 requestedVolumeMilli = requestedVolume,
                 status = status.toString(),
-                timestamp = timestampInstant
+                timestamp = pumpLocalTimeToInstant(timestampInstant)
             )
             else -> DispatchEvent.Other
         }
     }
 
+    // Desfase aprendido entre la hora que da la bomba (leida como UTC por PumpX2) y la hora real.
+    // Se calcula con las lecturas de glucosa, que siempre son recientes, y se aplica tambien a
+    // los bolus. Asi funciona con cualquier zona horaria y aunque la bomba no se haya cambiado.
+    @Volatile private var learnedOffset: Duration? = null
+    @Volatile private var learnedOffsetAt: Instant? = null
+
     /**
-     * La bomba cuenta segundos desde el 2008-01-01 00:00:00. Segun el modelo, esa hora puede ser
-     * UTC o la hora local de la bomba, asi que se prueban las dos interpretaciones y se acepta la
-     * que cae a menos de 30 minutos de ahora. Si ninguna cuadra se devuelve null y se usa la hora
-     * de recepcion como antes.
+     * Convierte los segundos de la bomba (desde 2008-01-01) en un Instant real. Calcula el
+     * desfase respecto a la hora actual, lo redondea a 15 minutos y, si el residuo es pequeno
+     * (< 10 min), lo memoriza. Si no cuadra devuelve null y se usa la hora de recepcion.
      */
     private fun pumpSecondsToInstantOrNull(pumpSeconds: Long): Instant? {
         if (pumpSeconds <= 0L) return null
         val now = nowProvider()
-        val unixSeconds = PUMP_EPOCH_UNIX_SECONDS + pumpSeconds
+        val raw = Instant.ofEpochSecond(PUMP_EPOCH_UNIX_SECONDS + pumpSeconds)
+        val diffSeconds = Duration.between(raw, now).seconds
+        val roundedSeconds = Math.round(diffSeconds / OFFSET_STEP_SECONDS.toDouble()) * OFFSET_STEP_SECONDS
+        val residual = Duration.ofSeconds(diffSeconds - roundedSeconds).abs()
+        if (Duration.ofSeconds(roundedSeconds).abs() > MAX_PUMP_OFFSET || residual > MAX_READING_CLOCK_SKEW) {
+            Timber.w("CGM readingTime descartada: raw=%s now=%s offset=%ds", raw, now, roundedSeconds)
+            return null
+        }
+        val offset = Duration.ofSeconds(roundedSeconds)
+        if (offset != learnedOffset) Timber.i("Desfase de la bomba aprendido: %s", offset)
+        learnedOffset = offset
+        learnedOffsetAt = now
+        return raw.plus(offset)
+    }
 
-        // 1) Interpretada como UTC
-        val asUtc = Instant.ofEpochSecond(unixSeconds)
-        if (Duration.between(asUtc, now).abs() <= MAX_READING_CLOCK_SKEW) return asUtc
-
-        // 2) Interpretada como hora local del movil
-        val asLocal = java.time.LocalDateTime
-            .ofEpochSecond(unixSeconds, 0, java.time.ZoneOffset.UTC)
-            .atZone(java.time.ZoneId.systemDefault())
-            .toInstant()
-        if (Duration.between(asLocal, now).abs() <= MAX_READING_CLOCK_SKEW) return asLocal
-
-        Timber.w(
-            "CGM readingTime descartada: pumpSeconds=%d utc=%s local=%s now=%s",
-            pumpSeconds, asUtc, asLocal, now
-        )
-        return null
+    /**
+     * Hora real de un evento de bolus. Usa el desfase aprendido con la glucosa (si es de la
+     * ultima hora). Si no hay, reinterpreta la hora de la bomba como hora local del movil.
+     * Si el resultado queda en el futuro (> 5 min) se usa la hora actual.
+     */
+    private fun pumpLocalTimeToInstant(pumpInstant: Instant): Instant {
+        val now = nowProvider()
+        val offset = learnedOffset
+        val learnedAt = learnedOffsetAt
+        val corrected = if (offset != null && learnedAt != null &&
+            Duration.between(learnedAt, now) <= OFFSET_MAX_AGE
+        ) {
+            pumpInstant.plus(offset)
+        } else {
+            pumpInstant
+                .atZone(java.time.ZoneOffset.UTC)
+                .toLocalDateTime()
+                .atZone(java.time.ZoneId.systemDefault())
+                .toInstant()
+        }
+        return if (corrected.isAfter(now.plus(Duration.ofMinutes(5)))) {
+            Timber.w("Treatment timestamp en el futuro (%s), se usa la hora actual", corrected)
+            now
+        } else {
+            corrected
+        }
     }
 
     private enum class StatusCategory {
@@ -227,6 +255,9 @@ class XdripMessageDispatcher(
 
         /** 2008-01-01T00:00:00Z en segundos Unix. */
         private const val PUMP_EPOCH_UNIX_SECONDS = 1199145600L
-        private val MAX_READING_CLOCK_SKEW: Duration = Duration.ofMinutes(30)
+        private val MAX_READING_CLOCK_SKEW: Duration = Duration.ofMinutes(10)
+        private const val OFFSET_STEP_SECONDS = 15 * 60L
+        private val MAX_PUMP_OFFSET: Duration = Duration.ofHours(14)
+        private val OFFSET_MAX_AGE: Duration = Duration.ofHours(1)
     }
 }
