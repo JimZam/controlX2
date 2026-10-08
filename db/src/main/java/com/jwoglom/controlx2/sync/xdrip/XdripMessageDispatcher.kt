@@ -90,9 +90,12 @@ class XdripMessageDispatcher(
 
         if (config.sendTreatments && StatusCategory.TREATMENT in categories) {
             val treatmentPayload = when (event) {
-                // No se envia el "bolus iniciado": no lleva unidades y, con la hora de la bomba ya
-                // corregida, duplicaba el tratamiento que llega despues con CurrentBolusStatusResponse.
-                is DispatchEvent.TreatmentInitiated -> null
+                is DispatchEvent.TreatmentInitiated -> XdripTreatmentPayload(
+                    eventType = "Bolus",
+                    createdAt = receivedAt.toString(),
+                    mills = receivedAt.toEpochMilli(),
+                    notes = "ControlX2 bolus initiated bolusId=${event.bolusId} status=${event.status}"
+                ).toJsonArrayString()
 
                 is DispatchEvent.TreatmentStatus -> XdripTreatmentPayload
                     .fromStatus(
