@@ -149,6 +149,7 @@ class XdripBroadcastSender(
         minimumIntervalSeconds: Int?,
         alsoSendNewFood: Boolean
     ): Boolean {
+        Timber.i("treatments=%s", treatmentsJsonString)
         val sentTreatment = sendWithCache(
             cacheKey = "treatments",
             action = ACTION_NEW_TREATMENT,
