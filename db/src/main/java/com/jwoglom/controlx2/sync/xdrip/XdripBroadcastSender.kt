@@ -151,7 +151,9 @@ class XdripBroadcastSender(
     ): Boolean {
         Timber.i("treatments=%s", treatmentsJsonString)
         val sentTreatment = sendWithCache(
-            cacheKey = "treatments",
+            // Cache aparte para basal y bolus: antes un basal intercalado borraba el ultimo bolus
+            // de la cache y el mismo bolus se reenviaba varias veces.
+            cacheKey = if (treatmentsJsonString.contains("\"Temp Basal\"")) "treatments_basal" else "treatments_bolus",
             action = ACTION_NEW_TREATMENT,
             extraKey = EXTRA_TREATMENTS,
             payload = treatmentsJsonString,
