@@ -69,9 +69,15 @@ class XdripMessageDispatcher(
                 "CGM mgdl=%d trendRate=%d readingTime=%s receivedAt=%s",
                 event.mgdl, event.trendRate, event.readingTime, receivedAt
             )
-            val sgvPayload = XdripSgvPayload
-                .fromValue(event.mgdl, event.trendRate, readingTime)
-                .toJsonArrayString()
+            // El trendRate de la bomba no es fiable (sale siempre -3), asi que la flecha se calcula
+            // con las lecturas recientes y sus horas reales.
+            val direction = directionFromReadings(event.mgdl, event.readingTime)
+            Timber.i("CGM direction=%s", direction)
+            val sgvPayload = XdripSgvPayload(
+                mgdl = event.mgdl,
+                mills = readingTime.toEpochMilli(),
+                direction = direction
+            ).toJsonArrayString()
             broadcaster.sendSgv(sgvPayload, config.cgmSgvMinimumIntervalSeconds)
         }
 
@@ -186,6 +192,41 @@ class XdripMessageDispatcher(
         }
     }
 
+    private val recentReadings = ArrayDeque<Pair<Instant, Int>>()
+
+    /**
+     * Calcula la flecha a partir de las lecturas de los ultimos 15 minutos (mg/dL por minuto).
+     * Sin hora de lectura fiable, o con menos de 4 minutos de historial, devuelve "NONE".
+     */
+    @Synchronized
+    private fun directionFromReadings(mgdl: Int, readingTime: Instant?): String {
+        if (readingTime == null) return "NONE"
+        val last = recentReadings.lastOrNull()
+        if (last == null || readingTime.isAfter(last.first)) {
+            recentReadings.addLast(readingTime to mgdl)
+        } else if (readingTime != last.first) {
+            return "NONE" // lectura antigua o fuera de orden
+        }
+        while (recentReadings.isNotEmpty() &&
+            Duration.between(recentReadings.first().first, readingTime) > SLOPE_WINDOW
+        ) recentReadings.removeFirst()
+
+        val oldest = recentReadings.first()
+        val minutes = Duration.between(oldest.first, readingTime).seconds / 60.0
+        if (minutes < MIN_SLOPE_MINUTES) return "NONE"
+        val slope = (mgdl - oldest.second) / minutes
+        Timber.i("CGM slope=%.2f mg/dL/min over %.1f min", slope, minutes)
+        return when {
+            slope <= -3 -> "DoubleDown"
+            slope <= -2 -> "SingleDown"
+            slope <= -1 -> "FortyFiveDown"
+            slope < 1 -> "Flat"
+            slope < 2 -> "FortyFiveUp"
+            slope < 3 -> "SingleUp"
+            else -> "DoubleUp"
+        }
+    }
+
     // Desfase aprendido entre la hora que da la bomba (leida como UTC por PumpX2) y la hora real.
     // Se calcula con las lecturas de glucosa, que siempre son recientes, y se aplica tambien a
     // los bolus. Asi funciona con cualquier zona horaria y aunque la bomba no se haya cambiado.
@@ -256,6 +297,8 @@ class XdripMessageDispatcher(
         /** 2008-01-01T00:00:00Z en segundos Unix. */
         private const val PUMP_EPOCH_UNIX_SECONDS = 1199145600L
         private val MAX_READING_CLOCK_SKEW: Duration = Duration.ofMinutes(10)
+        private val SLOPE_WINDOW: Duration = Duration.ofMinutes(15)
+        private const val MIN_SLOPE_MINUTES = 4.0
         private const val OFFSET_STEP_SECONDS = 15 * 60L
         private val MAX_PUMP_OFFSET: Duration = Duration.ofHours(14)
         private val OFFSET_MAX_AGE: Duration = Duration.ofHours(1)
