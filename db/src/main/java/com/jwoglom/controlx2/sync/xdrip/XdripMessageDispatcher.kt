@@ -15,6 +15,8 @@ import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBatteryAbs
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBolusStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentEGVGuiDataResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.InsulinStatusResponse
+import timber.log.Timber
+import java.time.Duration
 import java.time.Instant
 
 internal sealed class DispatchEvent {
@@ -23,7 +25,8 @@ internal sealed class DispatchEvent {
     data class PumpReservoir(val units: Int) : DispatchEvent()
     data class PumpBasal(val unitsPerHour: Double) : DispatchEvent()
     data class BasalTreatment(val unitsPerHour: Double) : DispatchEvent()
-    data class CgmSgv(val mgdl: Int, val trendRate: Int) : DispatchEvent()
+    // readingTime = hora real de la lectura del sensor segun la bomba (null si no es fiable)
+    data class CgmSgv(val mgdl: Int, val trendRate: Int, val readingTime: Instant? = null) : DispatchEvent()
     data class TreatmentInitiated(val bolusId: Int, val status: String) : DispatchEvent()
     data class TreatmentStatus(val bolusId: Int, val requestedVolumeMilli: Long, val status: String, val timestamp: Instant) : DispatchEvent()
     data object Other : DispatchEvent()
@@ -59,8 +62,15 @@ class XdripMessageDispatcher(
         val categories = updateSnapshot(event, receivedAt)
 
         if (config.sendCgmSgv && event is DispatchEvent.CgmSgv) {
+            // Se usa la hora real de la lectura: asi la misma lectura genera siempre el mismo
+            // payload (se filtra como duplicada) y xDrip+ calcula bien la tendencia.
+            val readingTime = event.readingTime ?: receivedAt
+            Timber.i(
+                "CGM mgdl=%d trendRate=%d readingTime=%s receivedAt=%s",
+                event.mgdl, event.trendRate, event.readingTime, receivedAt
+            )
             val sgvPayload = XdripSgvPayload
-                .fromValue(event.mgdl, event.trendRate, receivedAt)
+                .fromValue(event.mgdl, event.trendRate, readingTime)
                 .toJsonArrayString()
             broadcaster.sendSgv(sgvPayload, config.cgmSgvMinimumIntervalSeconds)
         }
@@ -160,7 +170,11 @@ class XdripMessageDispatcher(
             is ControlIQIOBResponse -> DispatchEvent.PumpIob(InsulinUnit.from1000To1(pumpDisplayedIOB))
             is InsulinStatusResponse -> DispatchEvent.PumpReservoir(currentInsulinAmount)
             is CurrentBasalStatusResponse -> DispatchEvent.BasalTreatment(InsulinUnit.from1000To1(currentBasalRate))
-            is CurrentEGVGuiDataResponse -> DispatchEvent.CgmSgv(cgmReading, trendRate)
+            is CurrentEGVGuiDataResponse -> DispatchEvent.CgmSgv(
+                mgdl = cgmReading,
+                trendRate = trendRate,
+                readingTime = pumpSecondsToInstantOrNull(bgReadingTimestampSeconds.toLong())
+            )
             is InitiateBolusResponse -> DispatchEvent.TreatmentInitiated(bolusId, statusType.toString())
             is CurrentBolusStatusResponse -> DispatchEvent.TreatmentStatus(
                 bolusId = bolusId,
@@ -172,6 +186,35 @@ class XdripMessageDispatcher(
         }
     }
 
+    /**
+     * La bomba cuenta segundos desde el 2008-01-01 00:00:00. Segun el modelo, esa hora puede ser
+     * UTC o la hora local de la bomba, asi que se prueban las dos interpretaciones y se acepta la
+     * que cae a menos de 30 minutos de ahora. Si ninguna cuadra se devuelve null y se usa la hora
+     * de recepcion como antes.
+     */
+    private fun pumpSecondsToInstantOrNull(pumpSeconds: Long): Instant? {
+        if (pumpSeconds <= 0L) return null
+        val now = nowProvider()
+        val unixSeconds = PUMP_EPOCH_UNIX_SECONDS + pumpSeconds
+
+        // 1) Interpretada como UTC
+        val asUtc = Instant.ofEpochSecond(unixSeconds)
+        if (Duration.between(asUtc, now).abs() <= MAX_READING_CLOCK_SKEW) return asUtc
+
+        // 2) Interpretada como hora local del movil
+        val asLocal = java.time.LocalDateTime
+            .ofEpochSecond(unixSeconds, 0, java.time.ZoneOffset.UTC)
+            .atZone(java.time.ZoneId.systemDefault())
+            .toInstant()
+        if (Duration.between(asLocal, now).abs() <= MAX_READING_CLOCK_SKEW) return asLocal
+
+        Timber.w(
+            "CGM readingTime descartada: pumpSeconds=%d utc=%s local=%s now=%s",
+            pumpSeconds, asUtc, asLocal, now
+        )
+        return null
+    }
+
     private enum class StatusCategory {
         PUMP_STATUS,
         TREATMENT,
@@ -181,5 +224,9 @@ class XdripMessageDispatcher(
     companion object {
         /** Duration for basal treatment segments, matching the pump status polling interval. */
         internal const val BASAL_TREATMENT_DURATION_MINUTES = 5
+
+        /** 2008-01-01T00:00:00Z en segundos Unix. */
+        private const val PUMP_EPOCH_UNIX_SECONDS = 1199145600L
+        private val MAX_READING_CLOCK_SKEW: Duration = Duration.ofMinutes(30)
     }
 }
