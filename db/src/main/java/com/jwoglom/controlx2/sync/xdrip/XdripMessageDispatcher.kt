@@ -90,29 +90,36 @@ class XdripMessageDispatcher(
 
         if (config.sendTreatments && StatusCategory.TREATMENT in categories) {
             val treatmentPayload = when (event) {
-                is DispatchEvent.TreatmentInitiated -> XdripTreatmentPayload(
-                    eventType = "Bolus",
-                    createdAt = receivedAt.toString(),
-                    mills = receivedAt.toEpochMilli(),
-                    notes = "ControlX2 bolus initiated bolusId=${event.bolusId} status=${event.status}"
-                ).toJsonArrayString()
+                // El "bolus iniciado" no lleva unidades: crea una entrada de 0 U que se suma a la del
+                // estado. Se envia solo el estado, que si trae la insulina.
+                is DispatchEvent.TreatmentInitiated -> null
 
-                is DispatchEvent.TreatmentStatus -> XdripTreatmentPayload
-                    .fromStatus(
-                        bolusId = event.bolusId,
-                        requestedVolumeMilli = event.requestedVolumeMilli,
-                        status = event.status,
-                        timestamp = event.timestamp
-                    )
-                    .toJsonArrayString()
+                // La bomba repite este mensaje varias veces por bolus (REQUESTING, ...). Se envia
+                // solo la primera vez con unidades para cada bolusId.
+                is DispatchEvent.TreatmentStatus ->
+                    if (event.requestedVolumeMilli > 0 && shouldSendBolusStatus(event.bolusId)) {
+                        XdripTreatmentPayload
+                            .fromStatus(
+                                bolusId = event.bolusId,
+                                requestedVolumeMilli = event.requestedVolumeMilli,
+                                status = event.status,
+                                timestamp = event.timestamp
+                            )
+                            .toJsonArrayString()
+                    } else null
 
-                is DispatchEvent.BasalTreatment -> XdripTreatmentPayload
-                    .forBasalRate(
-                        unitsPerHour = event.unitsPerHour,
-                        durationMinutes = BASAL_TREATMENT_DURATION_MINUTES,
-                        timestamp = receivedAt
-                    )
-                    .toJsonArrayString()
+                // Solo se envia el basal si cambia la tasa o si caduca el tramo anterior; antes
+                // salia una entrada nueva cada minuto, todas con hora distinta.
+                is DispatchEvent.BasalTreatment ->
+                    if (shouldSendBasal(event.unitsPerHour, receivedAt)) {
+                        XdripTreatmentPayload
+                            .forBasalRate(
+                                unitsPerHour = event.unitsPerHour,
+                                durationMinutes = BASAL_TREATMENT_DURATION_MINUTES,
+                                timestamp = receivedAt
+                            )
+                            .toJsonArrayString()
+                    } else null
 
                 else -> null
             }
@@ -190,6 +197,29 @@ class XdripMessageDispatcher(
             )
             else -> DispatchEvent.Other
         }
+    }
+
+    private var lastBolusStatusSentId: Int? = null
+
+    @Synchronized
+    private fun shouldSendBolusStatus(bolusId: Int): Boolean {
+        if (bolusId == lastBolusStatusSentId) return false
+        lastBolusStatusSentId = bolusId
+        return true
+    }
+
+    private var lastBasalRate: Double? = null
+    private var lastBasalSentAt: Instant? = null
+
+    @Synchronized
+    private fun shouldSendBasal(rate: Double, now: Instant): Boolean {
+        val lastAt = lastBasalSentAt
+        val expired = lastAt == null ||
+            Duration.between(lastAt, now) >= Duration.ofMinutes(BASAL_TREATMENT_DURATION_MINUTES.toLong())
+        if (rate == lastBasalRate && !expired) return false
+        lastBasalRate = rate
+        lastBasalSentAt = now
+        return true
     }
 
     private val recentReadings = ArrayDeque<Pair<Instant, Int>>()
