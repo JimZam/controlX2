@@ -79,6 +79,10 @@ class PhoneCommService : Service() {
                     UpdateComplication(this@PhoneCommService, WearX2Complication.CGM_READING)
                 }
                 override fun onOpenActivityRequested() {
+                    startActivity(
+                        Intent(applicationContext, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    )
                 }
                 override fun onBolusBlockedSignature() {
                     Timber.w("PhoneCommService: blocked bolus signature")
