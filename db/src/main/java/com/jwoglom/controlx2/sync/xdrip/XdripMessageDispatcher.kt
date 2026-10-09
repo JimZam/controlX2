@@ -64,14 +64,30 @@ class XdripMessageDispatcher(
         if (config.sendCgmSgv && event is DispatchEvent.CgmSgv) {
             // Se usa la hora real de la lectura: asi la misma lectura genera siempre el mismo
             // payload (se filtra como duplicada) y xDrip+ calcula bien la tendencia.
-            val readingTime = event.readingTime ?: receivedAt
+          val readingTime = event.readingTime
+if (readingTime == null) {
+    Timber.w(
+        "CGM no enviado: la fecha de lectura no es válida. mgdl=%d",
+        event.mgdl
+    )
+    return
+}
+
+if (readingTime.isAfter(receivedAt.plusSeconds(30))) {
+    Timber.w(
+        "CGM no enviado: fecha futura. readingTime=%s receivedAt=%s",
+        readingTime,
+        receivedAt
+    )
+    return
+}
             Timber.i(
                 "CGM mgdl=%d trendRate=%d readingTime=%s receivedAt=%s",
                 event.mgdl, event.trendRate, event.readingTime, receivedAt
             )
             // El trendRate de la bomba no es fiable (sale siempre -3), asi que la flecha se calcula
             // con las lecturas recientes y sus horas reales.
-            val direction = directionFromReadings(event.mgdl, event.readingTime)
+            val direction = directionFromReadings(event.mgdl, readingTime)
             Timber.i("CGM direction=%s", direction)
             val sgvPayload = XdripSgvPayload(
                 mgdl = event.mgdl,
