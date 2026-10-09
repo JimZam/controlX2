@@ -18,8 +18,6 @@ import com.jwoglom.pumpx2.pump.messages.response.currentStatus.InsulinStatusResp
 import timber.log.Timber
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
-import java.time.ZoneOffset
 
 internal sealed class DispatchEvent {
     data class PumpBattery(val percent: Int) : DispatchEvent()
@@ -27,25 +25,10 @@ internal sealed class DispatchEvent {
     data class PumpReservoir(val units: Int) : DispatchEvent()
     data class PumpBasal(val unitsPerHour: Double) : DispatchEvent()
     data class BasalTreatment(val unitsPerHour: Double) : DispatchEvent()
-
-    data class CgmSgv(
-        val mgdl: Int,
-        val trendRate: Int,
-        val readingTime: Instant? = null
-    ) : DispatchEvent()
-
-    data class TreatmentInitiated(
-        val bolusId: Int,
-        val status: String
-    ) : DispatchEvent()
-
-    data class TreatmentStatus(
-        val bolusId: Int,
-        val requestedVolumeMilli: Long,
-        val status: String,
-        val timestamp: Instant
-    ) : DispatchEvent()
-
+    // readingTime = hora real de la lectura del sensor segun la bomba (null si no es fiable)
+    data class CgmSgv(val mgdl: Int, val trendRate: Int, val readingTime: Instant? = null) : DispatchEvent()
+    data class TreatmentInitiated(val bolusId: Int, val status: String) : DispatchEvent()
+    data class TreatmentStatus(val bolusId: Int, val requestedVolumeMilli: Long, val status: String, val timestamp: Instant) : DispatchEvent()
     data object Other : DispatchEvent()
 }
 
@@ -56,12 +39,11 @@ class XdripMessageDispatcher(
 ) {
     constructor(context: Context) : this(
         broadcaster = XdripBroadcastSender(context),
+        // The host apps store xDrip config in the legacy "WearX2" SharedPreferences
+        // file (mobile Prefs.prefs() and wear WearPrefs.prefs() both use this file).
         configProvider = {
             XdripSyncConfig.load(
-                context.getSharedPreferences(
-                    "WearX2",
-                    Context.MODE_PRIVATE
-                )
+                context.getSharedPreferences("WearX2", Context.MODE_PRIVATE)
             )
         }
     )
@@ -80,68 +62,42 @@ class XdripMessageDispatcher(
         val categories = updateSnapshot(event, receivedAt)
 
         if (config.sendCgmSgv && event is DispatchEvent.CgmSgv) {
-            val readingTime = event.readingTime
-
-            if (readingTime == null) {
-                Timber.w(
-                    "CGM no enviado: la fecha de lectura no es válida. mgdl=%d",
-                    event.mgdl
-                )
-                return
-            }
-
-            if (readingTime.isAfter(receivedAt.plusSeconds(30))) {
-                Timber.w(
-                    "CGM no enviado: fecha futura. readingTime=%s receivedAt=%s",
-                    readingTime,
-                    receivedAt
-                )
-                return
-            }
-
-            val direction = directionFromReadings(
-                event.mgdl,
-                readingTime
+            // Se usa la hora real de la lectura: asi la misma lectura genera siempre el mismo
+            // payload (se filtra como duplicada) y xDrip+ calcula bien la tendencia.
+            val readingTime = event.readingTime ?: receivedAt
+            Timber.i(
+                "CGM mgdl=%d trendRate=%d readingTime=%s receivedAt=%s",
+                event.mgdl, event.trendRate, event.readingTime, receivedAt
             )
-
+            // El trendRate de la bomba no es fiable (sale siempre -3), asi que la flecha se calcula
+            // con las lecturas recientes y sus horas reales.
+            val direction = directionFromReadings(event.mgdl, event.readingTime)
+            Timber.i("CGM direction=%s", direction)
             val sgvPayload = XdripSgvPayload(
                 mgdl = event.mgdl,
                 mills = readingTime.toEpochMilli(),
                 direction = direction
             ).toJsonArrayString()
-
-            broadcaster.sendSgv(
-                sgvPayload,
-                config.cgmSgvMinimumIntervalSeconds
-            )
+            broadcaster.sendSgv(sgvPayload, config.cgmSgvMinimumIntervalSeconds)
         }
 
-        if (
-            config.sendPumpDeviceStatus &&
-            StatusCategory.PUMP_STATUS in categories
-        ) {
+        if (config.sendPumpDeviceStatus && StatusCategory.PUMP_STATUS in categories) {
             val deviceStatusPayload = latestPumpSnapshot
                 .toPayload(createdAt = receivedAt)
                 .toJsonString()
-
-            broadcaster.sendDeviceStatus(
-                deviceStatusPayload,
-                config.pumpDeviceStatusMinimumIntervalSeconds
-            )
+            broadcaster.sendDeviceStatus(deviceStatusPayload, config.pumpDeviceStatusMinimumIntervalSeconds)
         }
 
-        if (
-            config.sendTreatments &&
-            StatusCategory.TREATMENT in categories
-        ) {
+        if (config.sendTreatments && StatusCategory.TREATMENT in categories) {
             val treatmentPayload = when (event) {
+                // El "bolus iniciado" no lleva unidades: crea una entrada de 0 U que se suma a la del
+                // estado. Se envia solo el estado, que si trae la insulina.
                 is DispatchEvent.TreatmentInitiated -> null
 
+                // La bomba repite este mensaje varias veces por bolus (REQUESTING, ...). Se envia
+                // solo la primera vez con unidades para cada bolusId.
                 is DispatchEvent.TreatmentStatus ->
-                    if (
-                        event.requestedVolumeMilli > 0 &&
-                        shouldSendBolusStatus(event.bolusId)
-                    ) {
+                    if (event.requestedVolumeMilli > 0 && shouldSendBolusStatus(event.bolusId)) {
                         XdripTreatmentPayload
                             .fromStatus(
                                 bolusId = event.bolusId,
@@ -150,10 +106,10 @@ class XdripMessageDispatcher(
                                 timestamp = event.timestamp
                             )
                             .toJsonArrayString()
-                    } else {
-                        null
-                    }
+                    } else null
 
+                // Solo se envia el basal si cambia la tasa o si caduca el tramo anterior; antes
+                // salia una entrada nueva cada minuto, todas con hora distinta.
                 is DispatchEvent.BasalTreatment ->
                     if (shouldSendBasal(event.unitsPerHour, receivedAt)) {
                         XdripTreatmentPayload
@@ -163,13 +119,10 @@ class XdripMessageDispatcher(
                                 timestamp = receivedAt
                             )
                             .toJsonArrayString()
-                    } else {
-                        null
-                    }
+                    } else null
 
                 else -> null
             }
-
             if (treatmentPayload != null) {
                 broadcaster.sendTreatments(
                     treatmentsJsonString = treatmentPayload,
@@ -179,132 +132,69 @@ class XdripMessageDispatcher(
             }
         }
 
-        if (
-            config.sendStatusLine &&
-            StatusCategory.PUMP_STATUS in categories
-        ) {
+        if (config.sendStatusLine && StatusCategory.PUMP_STATUS in categories) {
             val statusline = buildString {
                 append("Pump")
-                latestPumpSnapshot.sgvMgdl?.value?.let {
-                    append(" SGV:$it")
-                }
-                latestPumpSnapshot.iobUnits?.value?.let {
-                    append(" IOB:${twoDecimalPlaces(it)}U")
-                }
-                latestPumpSnapshot.cartridgeUnits?.value?.let {
-                    append(" Cart:${it}U")
-                }
-                latestPumpSnapshot.basalUnitsPerHour?.value?.let {
-                    append(" ${twoDecimalPlaces(it)}U/h")
-                }
-                latestPumpSnapshot.batteryPercent?.value?.let {
-                    append(" Batt:$it")
-                }
+                latestPumpSnapshot.sgvMgdl?.value?.let { append(" SGV:$it") }
+                latestPumpSnapshot.iobUnits?.value?.let { append(" IOB:${twoDecimalPlaces(it)}U") }
+                latestPumpSnapshot.cartridgeUnits?.value?.let { append(" Cart:${it}U") }
+                latestPumpSnapshot.basalUnitsPerHour?.value?.let { append(" ${twoDecimalPlaces(it)}U/h") }
+                latestPumpSnapshot.batteryPercent?.value?.let { append(" Batt:$it") }
             }
-
-            broadcaster.sendExternalStatusline(
-                statusline,
-                config.statusLineMinimumIntervalSeconds
-            )
+            broadcaster.sendExternalStatusline(statusline, config.statusLineMinimumIntervalSeconds)
         }
     }
 
-    private fun updateSnapshot(
-        event: DispatchEvent,
-        receivedAt: Instant
-    ): Set<StatusCategory> {
+    private fun updateSnapshot(event: DispatchEvent, receivedAt: Instant): Set<StatusCategory> {
         return when (event) {
             is DispatchEvent.PumpBattery -> {
-                latestPumpSnapshot.batteryPercent =
-                    XdripTimedValue(event.percent, receivedAt)
+                latestPumpSnapshot.batteryPercent = XdripTimedValue(event.percent, receivedAt)
                 setOf(StatusCategory.PUMP_STATUS)
             }
-
             is DispatchEvent.PumpIob -> {
-                latestPumpSnapshot.iobUnits =
-                    XdripTimedValue(event.units, receivedAt)
+                latestPumpSnapshot.iobUnits = XdripTimedValue(event.units, receivedAt)
                 setOf(StatusCategory.PUMP_STATUS)
             }
-
             is DispatchEvent.PumpReservoir -> {
-                latestPumpSnapshot.cartridgeUnits =
-                    XdripTimedValue(event.units, receivedAt)
+                latestPumpSnapshot.cartridgeUnits = XdripTimedValue(event.units, receivedAt)
                 setOf(StatusCategory.PUMP_STATUS)
             }
-
             is DispatchEvent.PumpBasal -> {
-                latestPumpSnapshot.basalUnitsPerHour =
-                    XdripTimedValue(event.unitsPerHour, receivedAt)
+                latestPumpSnapshot.basalUnitsPerHour = XdripTimedValue(event.unitsPerHour, receivedAt)
                 setOf(StatusCategory.PUMP_STATUS)
             }
-
             is DispatchEvent.BasalTreatment -> {
-                latestPumpSnapshot.basalUnitsPerHour =
-                    XdripTimedValue(event.unitsPerHour, receivedAt)
-                setOf(
-                    StatusCategory.PUMP_STATUS,
-                    StatusCategory.TREATMENT
-                )
+                latestPumpSnapshot.basalUnitsPerHour = XdripTimedValue(event.unitsPerHour, receivedAt)
+                setOf(StatusCategory.PUMP_STATUS, StatusCategory.TREATMENT)
             }
-
             is DispatchEvent.CgmSgv -> {
-                latestPumpSnapshot.applySgvValue(
-                    event.mgdl,
-                    receivedAt
-                )
+                latestPumpSnapshot.applySgvValue(event.mgdl, receivedAt)
                 setOf(StatusCategory.PUMP_STATUS)
             }
-
             is DispatchEvent.TreatmentInitiated,
-            is DispatchEvent.TreatmentStatus ->
-                setOf(StatusCategory.TREATMENT)
-
-            is DispatchEvent.Other ->
-                setOf(StatusCategory.OTHER)
+            is DispatchEvent.TreatmentStatus -> setOf(StatusCategory.TREATMENT)
+            is DispatchEvent.Other -> setOf(StatusCategory.OTHER)
         }
     }
 
     private fun Message.toDispatchEvent(): DispatchEvent {
         return when (this) {
-            is CurrentBatteryAbstractResponse ->
-                DispatchEvent.PumpBattery(batteryPercent)
-
-            is ControlIQIOBResponse ->
-                DispatchEvent.PumpIob(
-                    InsulinUnit.from1000To1(pumpDisplayedIOB)
-                )
-
-            is InsulinStatusResponse ->
-                DispatchEvent.PumpReservoir(currentInsulinAmount)
-
-            is CurrentBasalStatusResponse ->
-                DispatchEvent.BasalTreatment(
-                    InsulinUnit.from1000To1(currentBasalRate)
-                )
-
-            is CurrentEGVGuiDataResponse ->
-                DispatchEvent.CgmSgv(
-                    mgdl = cgmReading,
-                    trendRate = trendRate,
-                    readingTime = pumpSecondsToInstantOrNull(
-                        bgReadingTimestampSeconds.toLong()
-                    )
-                )
-
-            is InitiateBolusResponse ->
-                DispatchEvent.TreatmentInitiated(
-                    bolusId,
-                    statusType.toString()
-                )
-
-            is CurrentBolusStatusResponse ->
-                DispatchEvent.TreatmentStatus(
-                    bolusId = bolusId,
-                    requestedVolumeMilli = requestedVolume,
-                    status = status.toString(),
-                    timestamp = pumpLocalTimeToInstant(timestampInstant)
-                )
-
+            is CurrentBatteryAbstractResponse -> DispatchEvent.PumpBattery(batteryPercent)
+            is ControlIQIOBResponse -> DispatchEvent.PumpIob(InsulinUnit.from1000To1(pumpDisplayedIOB))
+            is InsulinStatusResponse -> DispatchEvent.PumpReservoir(currentInsulinAmount)
+            is CurrentBasalStatusResponse -> DispatchEvent.BasalTreatment(InsulinUnit.from1000To1(currentBasalRate))
+            is CurrentEGVGuiDataResponse -> DispatchEvent.CgmSgv(
+                mgdl = cgmReading,
+                trendRate = trendRate,
+                readingTime = pumpSecondsToInstantOrNull(bgReadingTimestampSeconds.toLong())
+            )
+            is InitiateBolusResponse -> DispatchEvent.TreatmentInitiated(bolusId, statusType.toString())
+            is CurrentBolusStatusResponse -> DispatchEvent.TreatmentStatus(
+                bolusId = bolusId,
+                requestedVolumeMilli = requestedVolume,
+                status = status.toString(),
+                timestamp = pumpLocalTimeToInstant(timestampInstant)
+            )
             else -> DispatchEvent.Other
         }
     }
@@ -314,7 +204,6 @@ class XdripMessageDispatcher(
     @Synchronized
     private fun shouldSendBolusStatus(bolusId: Int): Boolean {
         if (bolusId == lastBolusStatusSentId) return false
-
         lastBolusStatusSentId = bolusId
         return true
     }
@@ -323,66 +212,40 @@ class XdripMessageDispatcher(
     private var lastBasalSentAt: Instant? = null
 
     @Synchronized
-    private fun shouldSendBasal(
-        rate: Double,
-        now: Instant
-    ): Boolean {
+    private fun shouldSendBasal(rate: Double, now: Instant): Boolean {
         val lastAt = lastBasalSentAt
-
         val expired = lastAt == null ||
-            Duration.between(lastAt, now) >=
-            Duration.ofMinutes(BASAL_TREATMENT_DURATION_MINUTES.toLong())
-
+            Duration.between(lastAt, now) >= Duration.ofMinutes(BASAL_TREATMENT_DURATION_MINUTES.toLong())
         if (rate == lastBasalRate && !expired) return false
-
         lastBasalRate = rate
         lastBasalSentAt = now
-
         return true
     }
 
     private val recentReadings = ArrayDeque<Pair<Instant, Int>>()
 
     /**
-     * Calcula la flecha a partir de las lecturas de los últimos 15 minutos.
-     * Sin hora fiable o con menos de 4 minutos de historial, devuelve NONE.
+     * Calcula la flecha a partir de las lecturas de los ultimos 15 minutos (mg/dL por minuto).
+     * Sin hora de lectura fiable, o con menos de 4 minutos de historial, devuelve "NONE".
      */
     @Synchronized
-    private fun directionFromReadings(
-        mgdl: Int,
-        readingTime: Instant?
-    ): String {
+    private fun directionFromReadings(mgdl: Int, readingTime: Instant?): String {
         if (readingTime == null) return "NONE"
-
         val last = recentReadings.lastOrNull()
-
         if (last == null || readingTime.isAfter(last.first)) {
             recentReadings.addLast(readingTime to mgdl)
         } else if (readingTime != last.first) {
-            return "NONE"
+            return "NONE" // lectura antigua o fuera de orden
         }
-
-        while (
-            recentReadings.isNotEmpty() &&
-            Duration.between(
-                recentReadings.first().first,
-                readingTime
-            ) > SLOPE_WINDOW
-        ) {
-            recentReadings.removeFirst()
-        }
+        while (recentReadings.isNotEmpty() &&
+            Duration.between(recentReadings.first().first, readingTime) > SLOPE_WINDOW
+        ) recentReadings.removeFirst()
 
         val oldest = recentReadings.first()
-
-        val minutes = Duration.between(
-            oldest.first,
-            readingTime
-        ).seconds / 60.0
-
+        val minutes = Duration.between(oldest.first, readingTime).seconds / 60.0
         if (minutes < MIN_SLOPE_MINUTES) return "NONE"
-
         val slope = (mgdl - oldest.second) / minutes
-
+        Timber.i("CGM slope=%.2f mg/dL/min over %.1f min", slope, minutes)
         return when {
             slope <= -3 -> "DoubleDown"
             slope <= -2 -> "SingleDown"
@@ -394,62 +257,57 @@ class XdripMessageDispatcher(
         }
     }
 
+    // Desfase aprendido entre la hora que da la bomba (leida como UTC por PumpX2) y la hora real.
+    // Se calcula con las lecturas de glucosa, que siempre son recientes, y se aplica tambien a
+    // los bolus. Asi funciona con cualquier zona horaria y aunque la bomba no se haya cambiado.
+    @Volatile private var learnedOffset: Duration? = null
+    @Volatile private var learnedOffsetAt: Instant? = null
+
     /**
-     * Convierte los segundos desde el 1 de enero de 2008 en un Instant.
-     * El desfase se estima comparando la marca de tiempo con el reloj actual.
+     * Convierte los segundos de la bomba (desde 2008-01-01) en un Instant real. Calcula el
+     * desfase respecto a la hora actual, lo redondea a 15 minutos y, si el residuo es pequeno
+     * (< 10 min), lo memoriza. Si no cuadra devuelve null y se usa la hora de recepcion.
      */
-    private fun pumpSecondsToInstantOrNull(
-        pumpSeconds: Long
-    ): Instant? {
+    private fun pumpSecondsToInstantOrNull(pumpSeconds: Long): Instant? {
         if (pumpSeconds <= 0L) return null
-
         val now = nowProvider()
-        val raw = Instant.ofEpochSecond(
-            PUMP_EPOCH_UNIX_SECONDS + pumpSeconds
-        )
-
+        val raw = Instant.ofEpochSecond(PUMP_EPOCH_UNIX_SECONDS + pumpSeconds)
         val diffSeconds = Duration.between(raw, now).seconds
-
-        val roundedSeconds = Math.round(
-            diffSeconds / OFFSET_STEP_SECONDS.toDouble()
-        ) * OFFSET_STEP_SECONDS
-
-        val residual = Duration.ofSeconds(
-            diffSeconds - roundedSeconds
-        ).abs()
-
-        if (
-            Duration.ofSeconds(roundedSeconds).abs() > MAX_PUMP_OFFSET ||
-            residual > MAX_READING_CLOCK_SKEW
-        ) {
-            Timber.w(
-                "CGM no enviado: marca de tiempo incoherente."
-            )
+        val roundedSeconds = Math.round(diffSeconds / OFFSET_STEP_SECONDS.toDouble()) * OFFSET_STEP_SECONDS
+        val residual = Duration.ofSeconds(diffSeconds - roundedSeconds).abs()
+        if (Duration.ofSeconds(roundedSeconds).abs() > MAX_PUMP_OFFSET || residual > MAX_READING_CLOCK_SKEW) {
+            Timber.w("CGM readingTime descartada: raw=%s now=%s offset=%ds", raw, now, roundedSeconds)
             return null
         }
-
-        return raw.plusSeconds(roundedSeconds)
+        val offset = Duration.ofSeconds(roundedSeconds)
+        if (offset != learnedOffset) Timber.i("Desfase de la bomba aprendido: %s", offset)
+        learnedOffset = offset
+        learnedOffsetAt = now
+        return raw.plus(offset)
     }
 
     /**
-     * Convierte la hora de un evento de bolus a Instant.
-     * Interpreta la hora recibida como hora local de la bomba.
+     * Hora real de un evento de bolus. Usa el desfase aprendido con la glucosa (si es de la
+     * ultima hora). Si no hay, reinterpreta la hora de la bomba como hora local del movil.
+     * Si el resultado queda en el futuro (> 5 min) se usa la hora actual.
      */
-    private fun pumpLocalTimeToInstant(
-        pumpInstant: Instant
-    ): Instant {
+    private fun pumpLocalTimeToInstant(pumpInstant: Instant): Instant {
         val now = nowProvider()
-
-        val corrected = pumpInstant
-            .atZone(ZoneOffset.UTC)
-            .toLocalDateTime()
-            .atZone(ZoneId.systemDefault())
-            .toInstant()
-
+        val offset = learnedOffset
+        val learnedAt = learnedOffsetAt
+        val corrected = if (offset != null && learnedAt != null &&
+            Duration.between(learnedAt, now) <= OFFSET_MAX_AGE
+        ) {
+            pumpInstant.plus(offset)
+        } else {
+            pumpInstant
+                .atZone(java.time.ZoneOffset.UTC)
+                .toLocalDateTime()
+                .atZone(java.time.ZoneId.systemDefault())
+                .toInstant()
+        }
         return if (corrected.isAfter(now.plus(Duration.ofMinutes(5)))) {
-            Timber.w(
-                "Treatment timestamp en el futuro; se usa la hora actual."
-            )
+            Timber.w("Treatment timestamp en el futuro (%s), se usa la hora actual", corrected)
             now
         } else {
             corrected
@@ -463,21 +321,16 @@ class XdripMessageDispatcher(
     }
 
     companion object {
+        /** Duration for basal treatment segments, matching the pump status polling interval. */
         internal const val BASAL_TREATMENT_DURATION_MINUTES = 5
 
+        /** 2008-01-01T00:00:00Z en segundos Unix. */
         private const val PUMP_EPOCH_UNIX_SECONDS = 1199145600L
-
-        private val MAX_READING_CLOCK_SKEW: Duration =
-            Duration.ofMinutes(10)
-
-        private val SLOPE_WINDOW: Duration =
-            Duration.ofMinutes(15)
-
+        private val MAX_READING_CLOCK_SKEW: Duration = Duration.ofMinutes(10)
+        private val SLOPE_WINDOW: Duration = Duration.ofMinutes(15)
         private const val MIN_SLOPE_MINUTES = 4.0
-
         private const val OFFSET_STEP_SECONDS = 15 * 60L
-
-        private val MAX_PUMP_OFFSET: Duration =
-            Duration.ofHours(14)
+        private val MAX_PUMP_OFFSET: Duration = Duration.ofHours(14)
+        private val OFFSET_MAX_AGE: Duration = Duration.ofHours(1)
     }
 }
