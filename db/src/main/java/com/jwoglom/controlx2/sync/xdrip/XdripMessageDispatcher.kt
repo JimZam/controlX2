@@ -18,6 +18,8 @@ import com.jwoglom.pumpx2.pump.messages.response.currentStatus.InsulinStatusResp
 import timber.log.Timber
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 internal sealed class DispatchEvent {
     data class PumpBattery(val percent: Int) : DispatchEvent()
@@ -26,7 +28,6 @@ internal sealed class DispatchEvent {
     data class PumpBasal(val unitsPerHour: Double) : DispatchEvent()
     data class BasalTreatment(val unitsPerHour: Double) : DispatchEvent()
 
-    // Hora real de la lectura del sensor según la bomba (null si no es fiable).
     data class CgmSgv(
         val mgdl: Int,
         val trendRate: Int,
@@ -55,8 +56,6 @@ class XdripMessageDispatcher(
 ) {
     constructor(context: Context) : this(
         broadcaster = XdripBroadcastSender(context),
-        // The host apps store xDrip config in the legacy "WearX2" SharedPreferences
-        // file (mobile Prefs.prefs() and wear WearPrefs.prefs() both use this file).
         configProvider = {
             XdripSyncConfig.load(
                 context.getSharedPreferences(
@@ -81,9 +80,6 @@ class XdripMessageDispatcher(
         val categories = updateSnapshot(event, receivedAt)
 
         if (config.sendCgmSgv && event is DispatchEvent.CgmSgv) {
-            // Se usa la hora real de la lectura.
-            // Así, la misma lectura genera siempre el mismo payload
-            // y xDrip+ puede calcular correctamente la tendencia.
             val readingTime = event.readingTime
 
             if (readingTime == null) {
@@ -103,22 +99,10 @@ class XdripMessageDispatcher(
                 return
             }
 
-            Timber.i(
-                "CGM mgdl=%d trendRate=%d readingTime=%s receivedAt=%s",
-                event.mgdl,
-                event.trendRate,
-                readingTime,
-                receivedAt
-            )
-
-            // El trendRate de la bomba no es fiable (sale siempre -3).
-            // La flecha se calcula con las lecturas recientes y sus horas reales.
             val direction = directionFromReadings(
                 event.mgdl,
                 readingTime
             )
-
-            Timber.i("CGM direction=%s", direction)
 
             val sgvPayload = XdripSgvPayload(
                 mgdl = event.mgdl,
@@ -151,11 +135,8 @@ class XdripMessageDispatcher(
             StatusCategory.TREATMENT in categories
         ) {
             val treatmentPayload = when (event) {
-                // El bolus iniciado no lleva unidades.
-                // Se envía solo el estado, que sí trae la insulina.
                 is DispatchEvent.TreatmentInitiated -> null
 
-                // Se envía solo la primera vez con unidades para cada bolusId.
                 is DispatchEvent.TreatmentStatus ->
                     if (
                         event.requestedVolumeMilli > 0 &&
@@ -173,8 +154,6 @@ class XdripMessageDispatcher(
                         null
                     }
 
-                // Solo se envía el basal si cambia la tasa
-                // o si caduca el tramo anterior.
                 is DispatchEvent.BasalTreatment ->
                     if (shouldSendBasal(event.unitsPerHour, receivedAt)) {
                         XdripTreatmentPayload
@@ -365,9 +344,7 @@ class XdripMessageDispatcher(
     private val recentReadings = ArrayDeque<Pair<Instant, Int>>()
 
     /**
-     * Calcula la flecha a partir de las lecturas de los últimos 15 minutos
-     * (mg/dL por minuto).
-     *
+     * Calcula la flecha a partir de las lecturas de los últimos 15 minutos.
      * Sin hora fiable o con menos de 4 minutos de historial, devuelve NONE.
      */
     @Synchronized
@@ -382,7 +359,7 @@ class XdripMessageDispatcher(
         if (last == null || readingTime.isAfter(last.first)) {
             recentReadings.addLast(readingTime to mgdl)
         } else if (readingTime != last.first) {
-            return "NONE" // Lectura antigua o fuera de orden.
+            return "NONE"
         }
 
         while (
@@ -406,12 +383,6 @@ class XdripMessageDispatcher(
 
         val slope = (mgdl - oldest.second) / minutes
 
-        Timber.i(
-            "CGM slope=%.2f mg/dL/min over %.1f min",
-            slope,
-            minutes
-        )
-
         return when {
             slope <= -3 -> "DoubleDown"
             slope <= -2 -> "SingleDown"
@@ -423,22 +394,9 @@ class XdripMessageDispatcher(
         }
     }
 
-    // Desfase aprendido entre la hora de la bomba (leída como UTC por PumpX2)
-    // y la hora real. Se calcula con las lecturas de glucosa y se aplica también
-    // a los bolus.
-    @Volatile
-    private var learnedOffset: Duration? = null
-
-    @Volatile
-    private var learnedOffsetAt: Instant? = null
-
     /**
-     * Convierte los segundos de la bomba (supuestamente desde 2008-01-01)
-     * en un Instant real.
-     *
-     * Calcula el desfase respecto a la hora actual, lo redondea a intervalos
-     * de 15 minutos y, si el residuo es pequeño (< 10 min), lo memoriza.
-     * Si no cuadra, devuelve null.
+     * Convierte los segundos desde el 1 de enero de 2008 en un Instant.
+     * El desfase se estima comparando la marca de tiempo con el reloj actual.
      */
     private fun pumpSecondsToInstantOrNull(
         pumpSeconds: Long
@@ -446,27 +404,15 @@ class XdripMessageDispatcher(
         if (pumpSeconds <= 0L) return null
 
         val now = nowProvider()
-
         val raw = Instant.ofEpochSecond(
             PUMP_EPOCH_UNIX_SECONDS + pumpSeconds
         )
 
         val diffSeconds = Duration.between(raw, now).seconds
 
-        val roundedSeconds =
-            Math.round(
-                diffSeconds / OFFSET_STEP_SECONDS.toDouble()
-            ) * OFFSET_STEP_SECONDS
-
-        // DIAGNÓSTICO TEMPORAL: no modifica el cálculo.
-        Timber.i(
-            "CGM TIME DEBUG: pumpSeconds=%d raw=%s now=%s diffSeconds=%d roundedSeconds=%d",
-            pumpSeconds,
-            raw,
-            now,
-            diffSeconds,
-            roundedSeconds
-        )
+        val roundedSeconds = Math.round(
+            diffSeconds / OFFSET_STEP_SECONDS.toDouble()
+        ) * OFFSET_STEP_SECONDS
 
         val residual = Duration.ofSeconds(
             diffSeconds - roundedSeconds
@@ -477,60 +423,32 @@ class XdripMessageDispatcher(
             residual > MAX_READING_CLOCK_SKEW
         ) {
             Timber.w(
-                "CGM readingTime descartada: raw=%s now=%s offset=%ds",
-                raw,
-                now,
-                roundedSeconds
+                "CGM no enviado: marca de tiempo incoherente."
             )
             return null
         }
 
-        val offset = Duration.ofSeconds(roundedSeconds)
-
-        if (offset != learnedOffset) {
-            Timber.i("Desfase de la bomba aprendido: %s", offset)
-        }
-
-        learnedOffset = offset
-        learnedOffsetAt = now
-
-        return raw.plus(offset)
+        return raw.plusSeconds(roundedSeconds)
     }
 
     /**
-     * Hora real de un evento de bolus.
-     *
-     * Usa el desfase aprendido con la glucosa si tiene menos de una hora.
-     * En caso contrario, reinterpreta la hora de la bomba como hora local.
+     * Convierte la hora de un evento de bolus a Instant.
+     * Interpreta la hora recibida como hora local de la bomba.
      */
     private fun pumpLocalTimeToInstant(
         pumpInstant: Instant
     ): Instant {
         val now = nowProvider()
 
-        val offset = learnedOffset
-        val learnedAt = learnedOffsetAt
+        val corrected = pumpInstant
+            .atZone(ZoneOffset.UTC)
+            .toLocalDateTime()
+            .atZone(ZoneId.systemDefault())
+            .toInstant()
 
-        val corrected = if (
-            offset != null &&
-            learnedAt != null &&
-            Duration.between(learnedAt, now) <= OFFSET_MAX_AGE
-        ) {
-            pumpInstant.plus(offset)
-        } else {
-            pumpInstant
-                .atZone(java.time.ZoneOffset.UTC)
-                .toLocalDateTime()
-                .atZone(java.time.ZoneId.systemDefault())
-                .toInstant()
-        }
-
-        return if (
-            corrected.isAfter(now.plus(Duration.ofMinutes(5)))
-        ) {
+        return if (corrected.isAfter(now.plus(Duration.ofMinutes(5)))) {
             Timber.w(
-                "Treatment timestamp en el futuro (%s), se usa la hora actual",
-                corrected
+                "Treatment timestamp en el futuro; se usa la hora actual."
             )
             now
         } else {
@@ -545,10 +463,8 @@ class XdripMessageDispatcher(
     }
 
     companion object {
-        /** Duración de los segmentos de tratamiento basal. */
         internal const val BASAL_TREATMENT_DURATION_MINUTES = 5
 
-        /** 2008-01-01T00:00:00Z en segundos Unix. */
         private const val PUMP_EPOCH_UNIX_SECONDS = 1199145600L
 
         private val MAX_READING_CLOCK_SKEW: Duration =
@@ -563,8 +479,5 @@ class XdripMessageDispatcher(
 
         private val MAX_PUMP_OFFSET: Duration =
             Duration.ofHours(14)
-
-        private val OFFSET_MAX_AGE: Duration =
-            Duration.ofHours(1)
     }
 }
