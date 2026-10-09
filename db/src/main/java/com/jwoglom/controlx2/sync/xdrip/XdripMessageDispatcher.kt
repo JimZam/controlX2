@@ -215,7 +215,9 @@ class XdripMessageDispatcher(
     private fun shouldSendBasal(rate: Double, now: Instant): Boolean {
         val lastAt = lastBasalSentAt
         val expired = lastAt == null ||
-            Duration.between(lastAt, now) >= Duration.ofMinutes(BASAL_TREATMENT_DURATION_MINUTES.toLong())
+            // Se reenvia 1 minuto antes de que caduque el tramo anterior para que no haya huecos
+            // sin basal activo en xDrip+ (y en el reloj que lo lee de ahi).
+            Duration.between(lastAt, now) >= Duration.ofMinutes(BASAL_TREATMENT_DURATION_MINUTES.toLong() - 1)
         if (rate == lastBasalRate && !expired) return false
         lastBasalRate = rate
         lastBasalSentAt = now
@@ -264,26 +266,51 @@ class XdripMessageDispatcher(
     @Volatile private var learnedOffsetAt: Instant? = null
 
     /**
-     * Convierte los segundos de la bomba (desde 2008-01-01) en un Instant real. Calcula el
-     * desfase respecto a la hora actual, lo redondea a 15 minutos y, si el residuo es pequeno
-     * (< 10 min), lo memoriza. Si no cuadra devuelve null y se usa la hora de recepcion.
+     * Convierte los segundos de la bomba (desde 2008-01-01) en un Instant real.
+     *
+     * PumpX2 los lee como UTC, pero la bomba guarda su hora local, asi que hay un desfase que es
+     * un multiplo de 15 minutos. Una vez aprendido se conserva mientras la lectura resultante sea
+     * verosimil (de hace 0 a 30 min): redondear de nuevo en cada lectura movia las lecturas de mas
+     * de 7 minutos al tramo siguiente y las dejaba en el futuro, y xDrip+ las guardaba asi.
+     * Nunca se devuelve una hora posterior a la actual. Si no cuadra, devuelve null.
      */
     private fun pumpSecondsToInstantOrNull(pumpSeconds: Long): Instant? {
         if (pumpSeconds <= 0L) return null
         val now = nowProvider()
         val raw = Instant.ofEpochSecond(PUMP_EPOCH_UNIX_SECONDS + pumpSeconds)
-        val diffSeconds = Duration.between(raw, now).seconds
-        val roundedSeconds = Math.round(diffSeconds / OFFSET_STEP_SECONDS.toDouble()) * OFFSET_STEP_SECONDS
-        val residual = Duration.ofSeconds(diffSeconds - roundedSeconds).abs()
-        if (Duration.ofSeconds(roundedSeconds).abs() > MAX_PUMP_OFFSET || residual > MAX_READING_CLOCK_SKEW) {
-            Timber.w("CGM readingTime descartada: raw=%s now=%s offset=%ds", raw, now, roundedSeconds)
+
+        // 1) Desfase ya aprendido: se conserva si la lectura resultante es verosimil.
+        learnedOffset?.let { offset ->
+            val candidate = raw.plus(offset)
+            val age = Duration.between(candidate, now)
+            if (age >= MIN_READING_AGE && age <= MAX_KEPT_READING_AGE) {
+                learnedOffsetAt = now
+                return if (candidate.isAfter(now)) now else candidate
+            }
+        }
+
+        // 2) Aprender: multiplo de 15 min que deja la lectura entre -2 y +13 min respecto a ahora.
+        val diff = Duration.between(raw, now).seconds
+        var offsetSeconds =
+            Math.floorDiv(diff + FUTURE_MARGIN.seconds, OFFSET_STEP_SECONDS) * OFFSET_STEP_SECONDS
+
+        // La bomba suele tener la hora local del movil. Si ese valor esperado queda a un solo
+        // tramo de distancia, se prefiere: resuelve las lecturas de mas de 13 min y los relojes
+        // de la bomba algo adelantados.
+        val expected = -java.time.ZoneId.systemDefault().rules.getOffset(now).totalSeconds.toLong()
+        if (Math.abs(offsetSeconds - expected) == OFFSET_STEP_SECONDS) offsetSeconds = expected
+
+        val offset = Duration.ofSeconds(offsetSeconds)
+        val candidate = raw.plus(offset)
+        val age = Duration.between(candidate, now)
+        if (offset.abs() > MAX_PUMP_OFFSET || age < MIN_LEARN_AGE || age > MAX_KEPT_READING_AGE) {
+            Timber.w("CGM readingTime descartada: raw=%s now=%s offset=%s age=%s", raw, now, offset, age)
             return null
         }
-        val offset = Duration.ofSeconds(roundedSeconds)
         if (offset != learnedOffset) Timber.i("Desfase de la bomba aprendido: %s", offset)
         learnedOffset = offset
         learnedOffsetAt = now
-        return raw.plus(offset)
+        return if (candidate.isAfter(now)) now else candidate
     }
 
     /**
@@ -326,7 +353,10 @@ class XdripMessageDispatcher(
 
         /** 2008-01-01T00:00:00Z en segundos Unix. */
         private const val PUMP_EPOCH_UNIX_SECONDS = 1199145600L
-        private val MAX_READING_CLOCK_SKEW: Duration = Duration.ofMinutes(10)
+        private val MIN_READING_AGE: Duration = Duration.ofMinutes(-2)
+        private val MIN_LEARN_AGE: Duration = Duration.ofMinutes(-5)
+        private val MAX_KEPT_READING_AGE: Duration = Duration.ofMinutes(30)
+        private val FUTURE_MARGIN: Duration = Duration.ofMinutes(2)
         private val SLOPE_WINDOW: Duration = Duration.ofMinutes(15)
         private const val MIN_SLOPE_MINUTES = 4.0
         private const val OFFSET_STEP_SECONDS = 15 * 60L
