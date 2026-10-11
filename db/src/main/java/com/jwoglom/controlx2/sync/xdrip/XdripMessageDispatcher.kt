@@ -69,10 +69,17 @@ class XdripMessageDispatcher(
                 "CGM mgdl=%d trendRate=%d readingTime=%s receivedAt=%s",
                 event.mgdl, event.trendRate, event.readingTime, receivedAt
             )
-            // El trendRate de la bomba no es fiable (sale siempre -3), asi que la flecha se calcula
-            // con las lecturas recientes y sus horas reales.
-            val direction = directionFromReadings(event.mgdl, event.readingTime)
-            Timber.i("CGM direction=%s", direction)
+            // La flecha sale del trendRate de la bomba (decimas de mg/dL por minuto, p. ej. -10 =
+            // -1,0 mg/dL/min), que es lo que muestra ControlX2. La pendiente de las lecturas de los
+            // ultimos 15 min se sigue calculando: es el respaldo si el trendRate no es utilizable y
+            // reacciona mas despacio, asi que no se usa como fuente principal.
+            val slopeDirection = directionFromReadings(event.mgdl, event.readingTime)
+            val pumpDirection = directionFromPumpTrendRate(event.trendRate)
+            val direction = pumpDirection ?: slopeDirection
+            Timber.i(
+                "CGM direction=%s (bomba=%s, pendiente=%s)",
+                direction, pumpDirection, slopeDirection
+            )
             val sgvPayload = XdripSgvPayload(
                 mgdl = event.mgdl,
                 mills = readingTime.toEpochMilli(),
@@ -224,6 +231,25 @@ class XdripMessageDispatcher(
         return true
     }
 
+    /**
+     * Flecha a partir del trendRate de la bomba, en decimas de mg/dL por minuto. Usa las bandas
+     * habituales de Dexcom: <1 estable, 1-2 flecha a 45 grados, 2-3 una flecha, >=3 doble flecha.
+     * Devuelve null si el valor no es creible (se usa entonces la pendiente de las lecturas).
+     */
+    private fun directionFromPumpTrendRate(trendRate: Int): String? {
+        val rate = trendRate / 10.0
+        if (Math.abs(rate) > MAX_PUMP_TREND_MGDL_PER_MIN) return null
+        return when {
+            rate <= -3 -> "DoubleDown"
+            rate <= -2 -> "SingleDown"
+            rate <= -1 -> "FortyFiveDown"
+            rate < 1 -> "Flat"
+            rate < 2 -> "FortyFiveUp"
+            rate < 3 -> "SingleUp"
+            else -> "DoubleUp"
+        }
+    }
+
     private val recentReadings = ArrayDeque<Pair<Instant, Int>>()
 
     /**
@@ -360,6 +386,7 @@ class XdripMessageDispatcher(
         private val SLOPE_WINDOW: Duration = Duration.ofMinutes(15)
         private const val MIN_SLOPE_MINUTES = 4.0
         private const val OFFSET_STEP_SECONDS = 15 * 60L
+        private const val MAX_PUMP_TREND_MGDL_PER_MIN = 10.0
         private val MAX_PUMP_OFFSET: Duration = Duration.ofHours(14)
         private val OFFSET_MAX_AGE: Duration = Duration.ofHours(1)
     }
