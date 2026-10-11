@@ -625,10 +625,13 @@ class CommService : Service(), CommServiceCallbacks {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Timber.w("CommService onTaskRemoved")
-        triggerAppReload(applicationContext)
-        Toast.makeText(this, "ControlX2 service removed", Toast.LENGTH_SHORT).show()
-        stopSelf()
+        // Antes: triggerAppReload() + stopSelf(). Cuando Android quita la tarea de recientes
+        // (o el usuario la desliza), triggerAppReload() intenta relanzar MainActivity desde
+        // segundo plano, Android lo bloquea (BAL_BLOCK) y la app termina con Runtime.exit(0),
+        // dejando el servicio de lecturas parado. Android vuelve a entregar onTaskRemoved a los
+        // procesos reiniciados y se repite hasta que deja de reiniciar el servicio.
+        // Un servicio en primer plano sigue funcionando sin la tarea, asi que solo se anota.
+        Timber.w("CommService onTaskRemoved (ignored: service keeps running)")
     }
 
     private data class DisplayablePumpData(
