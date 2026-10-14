@@ -71,7 +71,7 @@ fun TherapyMetricsCard(
                 MetricDisplay(
                     label = "IOB",
                     value = iob?.let { "%.2f U".format(it) } ?: "--",
-                    color = InsulinColors.Bolus
+                    color = if (androidx.compose.foundation.isSystemInDarkTheme()) Color.White else InsulinColors.Bolus
                 )
 
                 if (cob != null) {
