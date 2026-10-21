@@ -550,6 +550,7 @@ class CommService : Service(), CommServiceCallbacks {
     }
 
     override fun showToast(text: String, duration: Int) {
+        // Solo lo usan avisos de error (p. ej. bomba aun emparejada) y el de eventos, que es opcional.
         Toast.makeText(this, text, duration).show()
     }
 
@@ -567,7 +568,7 @@ class CommService : Service(), CommServiceCallbacks {
         }
 
         started = true
-        Toast.makeText(this, "ControlX2 service starting", Toast.LENGTH_SHORT).show()
+        Timber.i("ControlX2 service starting")
 
         updateNotification("Initializing...")
 
@@ -840,7 +841,7 @@ class CommService : Service(), CommServiceCallbacks {
         scope.cancel()
         messageBus.close()
         httpDebugApiService?.stop()
-        Toast.makeText(this, "ControlX2 service destroyed", Toast.LENGTH_SHORT).show()
+        Timber.i("ControlX2 service destroyed")
     }
 
     private fun createNotification(): Notification {
