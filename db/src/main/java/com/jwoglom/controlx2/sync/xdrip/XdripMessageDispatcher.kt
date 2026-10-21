@@ -15,6 +15,8 @@ import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBatteryAbs
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBolusStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentEGVGuiDataResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.InsulinStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.CarbEnteredHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLogStreamResponse
 import timber.log.Timber
 import java.time.Duration
 import java.time.Instant
@@ -29,6 +31,8 @@ internal sealed class DispatchEvent {
     data class CgmSgv(val mgdl: Int, val trendRate: Int, val readingTime: Instant? = null) : DispatchEvent()
     data class TreatmentInitiated(val bolusId: Int, val status: String) : DispatchEvent()
     data class TreatmentStatus(val bolusId: Int, val requestedVolumeMilli: Long, val status: String, val timestamp: Instant) : DispatchEvent()
+    data class CarbEntry(val seqId: Long, val grams: Int, val timestamp: Instant)
+    data class CarbEntries(val entries: List<CarbEntry>) : DispatchEvent()
     data object Other : DispatchEvent()
 }
 
@@ -128,13 +132,29 @@ class XdripMessageDispatcher(
                             .toJsonArrayString()
                     } else null
 
+                // Carbohidratos introducidos en la bomba (history log). Se envian los nuevos de las
+                // ultimas horas, una sola vez cada uno; el historico antiguo no se reenvia.
+                is DispatchEvent.CarbEntries -> {
+                    val fresh = newCarbEntries(event.entries, receivedAt)
+                    if (fresh.isEmpty()) null else {
+                        val arr = org.json.JSONArray()
+                        fresh.forEach {
+                            arr.put(XdripTreatmentPayload.forCarbs(it.grams, it.seqId, it.timestamp).toJsonObject())
+                        }
+                        Timber.i("CARBS enviados a xDrip: %s", fresh)
+                        arr.toString()
+                    }
+                }
+
                 else -> null
             }
             if (treatmentPayload != null) {
+                val isCarbs = event is DispatchEvent.CarbEntries
                 broadcaster.sendTreatments(
                     treatmentsJsonString = treatmentPayload,
-                    minimumIntervalSeconds = config.treatmentsMinimumIntervalSeconds,
-                    alsoSendNewFood = true
+                    // Los carbohidratos no usan el intervalo minimo: son pocos y no deben perderse.
+                    minimumIntervalSeconds = if (isCarbs) 0 else config.treatmentsMinimumIntervalSeconds,
+                    alsoSendNewFood = !isCarbs
                 )
             }
         }
@@ -179,7 +199,8 @@ class XdripMessageDispatcher(
                 setOf(StatusCategory.PUMP_STATUS)
             }
             is DispatchEvent.TreatmentInitiated,
-            is DispatchEvent.TreatmentStatus -> setOf(StatusCategory.TREATMENT)
+            is DispatchEvent.TreatmentStatus,
+            is DispatchEvent.CarbEntries -> setOf(StatusCategory.TREATMENT)
             is DispatchEvent.Other -> setOf(StatusCategory.OTHER)
         }
     }
@@ -202,8 +223,32 @@ class XdripMessageDispatcher(
                 status = status.toString(),
                 timestamp = pumpLocalTimeToInstant(timestampInstant)
             )
+            is HistoryLogStreamResponse -> {
+                val carbs = historyLogs.filterIsInstance<CarbEnteredHistoryLog>().mapNotNull {
+                    val grams = it.carbs.toInt()
+                    if (grams <= 0) null else DispatchEvent.CarbEntry(
+                        seqId = it.sequenceNum.toLong(),
+                        grams = grams,
+                        timestamp = pumpLocalTimeToInstant(it.pumpTimeSecInstant)
+                    )
+                }
+                if (carbs.isEmpty()) DispatchEvent.Other else DispatchEvent.CarbEntries(carbs)
+            }
             else -> DispatchEvent.Other
         }
+    }
+
+    private val sentCarbSeqIds = LinkedHashSet<Long>()
+
+    /** Entradas de carbohidratos aun no enviadas y de menos de [CARB_MAX_AGE]. */
+    @Synchronized
+    private fun newCarbEntries(entries: List<DispatchEvent.CarbEntry>, now: Instant): List<DispatchEvent.CarbEntry> {
+        val fresh = entries.filter {
+            it.seqId !in sentCarbSeqIds && Duration.between(it.timestamp, now) <= CARB_MAX_AGE
+        }
+        fresh.forEach { sentCarbSeqIds.add(it.seqId) }
+        while (sentCarbSeqIds.size > 200) sentCarbSeqIds.remove(sentCarbSeqIds.first())
+        return fresh
     }
 
     private var lastBolusStatusSentId: Int? = null
@@ -374,6 +419,9 @@ class XdripMessageDispatcher(
     }
 
     companion object {
+        /** Antiguedad maxima de unos carbohidratos para enviarlos a xDrip (evita volcar el historico). */
+        internal val CARB_MAX_AGE: Duration = Duration.ofHours(3)
+
         /** Duration for basal treatment segments, matching the pump status polling interval. */
         internal const val BASAL_TREATMENT_DURATION_MINUTES = 5
 
