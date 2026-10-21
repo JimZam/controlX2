@@ -153,7 +153,11 @@ class XdripBroadcastSender(
         val sentTreatment = sendWithCache(
             // Cache aparte para basal y bolus: antes un basal intercalado borraba el ultimo bolus
             // de la cache y el mismo bolus se reenviaba varias veces.
-            cacheKey = if (treatmentsJsonString.contains("\"Temp Basal\"")) "treatments_basal" else "treatments_bolus",
+            cacheKey = when {
+                treatmentsJsonString.contains("\"Temp Basal\"") -> "treatments_basal"
+                treatmentsJsonString.contains("\"Carb Correction\"") -> "treatments_carbs"
+                else -> "treatments_bolus"
+            },
             action = ACTION_NEW_TREATMENT,
             extraKey = EXTRA_TREATMENTS,
             payload = treatmentsJsonString,
