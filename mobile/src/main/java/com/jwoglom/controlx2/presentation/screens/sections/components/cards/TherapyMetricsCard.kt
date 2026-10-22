@@ -73,7 +73,7 @@ fun TherapyMetricsCard(
                     value = iob?.let { "%.2fu".format(it) } ?: "--",
                     // Oscuro: el mismo color que la etiqueta "mg/dL" (onSurfaceVariant). Claro: morado.
                     color = if (androidx.compose.foundation.isSystemInDarkTheme()) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+                        androidx.compose.ui.graphics.Color.White
                     } else {
                         InsulinColors.Bolus
                     }
