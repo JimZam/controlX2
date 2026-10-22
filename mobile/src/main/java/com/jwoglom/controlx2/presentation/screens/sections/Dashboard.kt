@@ -200,6 +200,15 @@ fun Dashboard(
                 item {
                     val cgmReading = ds.cgmReading.observeAsState()
                     val cgmDeltaArrow = ds.cgmDeltaArrow.observeAsState()
+                    val cgmDeltaLogs = historyLogViewModel?.latestItemsForTypes(
+                        com.jwoglom.controlx2.presentation.screens.sections.components.CgmReadingHistoryLogs,
+                        4
+                    )?.observeAsState()
+                    val cgmDeltaMgdl = remember(cgmDeltaLogs?.value, cgmReading.value) {
+                        com.jwoglom.controlx2.presentation.screens.sections.components.cards.cgmDeltaMgdl(
+                            cgmDeltaLogs?.value, cgmReading.value
+                        )
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -209,6 +218,7 @@ fun Dashboard(
                         GlucoseHeroCard(
                             glucoseValue = cgmReading.value,
                             deltaArrow = cgmDeltaArrow.value,
+                            deltaMgdl = cgmDeltaMgdl,
                             modifier = Modifier.weight(1f).fillMaxHeight()
                         )
 
