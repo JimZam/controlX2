@@ -39,7 +39,9 @@ fun GlucoseHeroCard(
     deltaArrow: String?,
     modifier: Modifier = Modifier,
     // Variacion respecto a la lectura anterior, en mg/dL (null = no mostrar)
-    deltaMgdl: Int? = null
+    deltaMgdl: Int? = null,
+    // Minutos desde la lectura (null = no mostrar)
+    ageMinutes: Int? = null
 ) {
     val dataStore = LocalDataStore.current
     val glucoseUnit by dataStore.glucoseUnitPreference.observeAsState(GlucoseUnit.MGDL)
@@ -122,6 +124,13 @@ fun GlucoseHeroCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
+                if (!noCgmConnected && ageMinutes != null) {
+                    Text(
+                        "${ageMinutes} min ",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (!noCgmConnected && deltaMgdl != null) {
                     val deltaText = when (glucoseUnit) {
                         GlucoseUnit.MGDL -> String.format("%+d", deltaMgdl)
@@ -161,6 +170,17 @@ fun cgmDeltaMgdl(logs: List<HistoryLogItem>?, current: Int?): Int? {
     val previous = points.getOrNull(1) ?: return null
     if (latest.timestamp - previous.timestamp > 12 * 60) return null
     return latest.value.toInt() - previous.value.toInt()
+}
+
+/**
+ * Minutos transcurridos desde la ultima lectura segun el historial de la bomba.
+ * Si la lectura actual aun no esta en el historial, se considera recien llegada (0).
+ */
+fun cgmAgeMinutes(logs: List<HistoryLogItem>?, current: Int?, nowSeconds: Long): Int? {
+    if (logs == null || current == null || current <= 0) return null
+    val latest = logs.mapNotNull { it.toCgmDataPoint() }.maxByOrNull { it.timestamp } ?: return null
+    if (current != latest.value.toInt()) return 0
+    return maxOf(0L, (nowSeconds - latest.timestamp) / 60).toInt()
 }
 
 @Composable
