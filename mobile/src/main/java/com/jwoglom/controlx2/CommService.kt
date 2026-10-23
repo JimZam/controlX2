@@ -483,9 +483,11 @@ class CommService : Service(), CommServiceCallbacks {
     }
 
     private val xdripMessageDispatcher by lazy { XdripMessageDispatcher(applicationContext) }
+    private val pumpSilenceMonitor by lazy { PumpSilenceMonitor(applicationContext) }
 
     override fun dispatchExternalMessage(message: com.jwoglom.pumpx2.pump.messages.Message) {
         xdripMessageDispatcher.onReceiveMessage(message)
+        pumpSilenceMonitor.onMessage(message)
     }
 
     override fun updateComplicationData(key: String, value: String, timestamp: Instant) {
@@ -569,6 +571,7 @@ class CommService : Service(), CommServiceCallbacks {
 
         started = true
         Timber.i("ControlX2 service starting")
+        pumpSilenceMonitor.start()
 
         updateNotification("Initializing...")
 
@@ -841,6 +844,7 @@ class CommService : Service(), CommServiceCallbacks {
         scope.cancel()
         messageBus.close()
         httpDebugApiService?.stop()
+        pumpSilenceMonitor.stop()
         Timber.i("ControlX2 service destroyed")
     }
 
