@@ -14,7 +14,7 @@ import timber.log.Timber
  */
 class HistoryLogSyncWorker(
     // Antes 5 min. Cada cuanto se piden a la bomba los registros nuevos (los que alimentan el grafico).
-    private val intervalMinutes: Int = 1,
+    private val intervalMinutes: Int = 5,
     private val requestSync: () -> Unit
 ) : PumpHistoryLogSyncWorker {
     private val handler = Handler(Looper.getMainLooper())
