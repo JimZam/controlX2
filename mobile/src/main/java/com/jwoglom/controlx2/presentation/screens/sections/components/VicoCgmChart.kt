@@ -1006,7 +1006,15 @@ fun VicoCgmChart(
     val basalLimitSettings by dataStore.basalLimitSettingsResponse.observeAsState()
 
     // Fetch all chart data
-    val currentTimeSeconds = remember(timeRange) {
+    // El borde derecho del grafico ("ahora") se actualiza cada minuto. Antes solo se calculaba al
+    // abrir la pantalla o al cambiar el rango (3/6/12/24 h) y se quedaba parado.
+    val minuteTick by androidx.compose.runtime.produceState(0L) {
+        while (true) {
+            kotlinx.coroutines.delay(60_000L)
+            value += 1
+        }
+    }
+    val currentTimeSeconds = remember(timeRange, minuteTick) {
         previewData?.currentTimeSeconds ?: Instant.now().epochSecond
     }
     val rangeSeconds = timeRange.hours * 3600L
