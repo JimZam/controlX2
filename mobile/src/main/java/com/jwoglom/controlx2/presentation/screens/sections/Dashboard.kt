@@ -204,6 +204,18 @@ fun Dashboard(
                         com.jwoglom.controlx2.presentation.screens.sections.components.CgmReadingHistoryLogs,
                         4
                     )?.observeAsState()
+                    // Se refresca cada 30 s para que los minutos avancen solos
+                    val cgmNowSeconds by androidx.compose.runtime.produceState(System.currentTimeMillis() / 1000) {
+                        while (true) {
+                            kotlinx.coroutines.delay(30_000L)
+                            value = System.currentTimeMillis() / 1000
+                        }
+                    }
+                    val cgmAgeMinutes = remember(cgmDeltaLogs?.value, cgmReading.value, cgmNowSeconds) {
+                        com.jwoglom.controlx2.presentation.screens.sections.components.cards.cgmAgeMinutes(
+                            cgmDeltaLogs?.value, cgmReading.value, cgmNowSeconds
+                        )
+                    }
                     val cgmDeltaMgdl = remember(cgmDeltaLogs?.value, cgmReading.value) {
                         com.jwoglom.controlx2.presentation.screens.sections.components.cards.cgmDeltaMgdl(
                             cgmDeltaLogs?.value, cgmReading.value
@@ -219,6 +231,7 @@ fun Dashboard(
                             glucoseValue = cgmReading.value,
                             deltaArrow = cgmDeltaArrow.value,
                             deltaMgdl = cgmDeltaMgdl,
+                            ageMinutes = cgmAgeMinutes,
                             modifier = Modifier.weight(1f).fillMaxHeight()
                         )
 
