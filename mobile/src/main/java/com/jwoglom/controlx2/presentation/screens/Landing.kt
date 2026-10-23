@@ -155,13 +155,12 @@ fun Landing(
         }
     }
     // Color del texto del boton "Cánula" segun el tiempo desde el ultimo cambio registrado:
-    // 24 h naranja, 36 h naranja oscuro, 48 h rojo. Antes de las 24 h, el color normal (null).
+    // 36 h naranja claro, 48 h rojo oscuro. Antes de las 36 h, el color normal (null).
     val cannulaAgeMs = if (cannulaInsertedAt > 0L) nowMs - cannulaInsertedAt else 0L
     val cannulaWarnColor: androidx.compose.ui.graphics.Color? = when {
         cannulaInsertedAt <= 0L -> null
-        cannulaAgeMs >= CANNULA_RED_MS -> GlucoseColors.Low
-        cannulaAgeMs >= CANNULA_DARK_ORANGE_MS -> GlucoseColors.High
-        cannulaAgeMs >= CANNULA_ORANGE_MS -> GlucoseColors.Elevated
+        cannulaAgeMs >= CANNULA_RED_MS -> CANNULA_DARK_RED
+        cannulaAgeMs >= CANNULA_ORANGE_MS -> CANNULA_LIGHT_ORANGE
         else -> null
     }
     var tempRatePrefill by remember { mutableStateOf<TempRateInputPrefill?>(null) }
@@ -557,7 +556,9 @@ fun Landing(
                                     Icons.Filled.Healing,
                                     "Cannula icon",
                                     Modifier.size(24.dp),
-                                    tint = if (isSystemInDarkTheme()) Colors.primary else Colors.onPrimary
+                                    tint = cannulaWarnColor
+                                        ?: if (isSystemInDarkTheme()) Colors.primary
+                                        else Colors.onPrimary
                                 )
                             },
                             text = {
@@ -796,9 +797,10 @@ internal fun LandingSettingsPreview() {
     }
 }
 
-private const val CANNULA_ORANGE_MS = 24L * 60 * 60 * 1000
-private const val CANNULA_DARK_ORANGE_MS = 36L * 60 * 60 * 1000
+private const val CANNULA_ORANGE_MS = 36L * 60 * 60 * 1000
 private const val CANNULA_RED_MS = 48L * 60 * 60 * 1000
+private val CANNULA_LIGHT_ORANGE = androidx.compose.ui.graphics.Color(0xFFFFB74D)
+private val CANNULA_DARK_RED = androidx.compose.ui.graphics.Color(0xFFC62828)
 
 private fun cannulaAgeText(insertedAtMs: Long, nowMs: Long = System.currentTimeMillis()): String {
     if (insertedAtMs <= 0L) return "sin registro previo"
