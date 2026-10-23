@@ -13,7 +13,8 @@ import timber.log.Timber
  * Lightweight periodic worker that triggers HistoryLogStatus requests while the pump is connected.
  */
 class HistoryLogSyncWorker(
-    private val intervalMinutes: Int = 5,
+    // Antes 5 min. Cada cuanto se piden a la bomba los registros nuevos (los que alimentan el grafico).
+    private val intervalMinutes: Int = 1,
     private val requestSync: () -> Unit
 ) : PumpHistoryLogSyncWorker {
     private val handler = Handler(Looper.getMainLooper())
