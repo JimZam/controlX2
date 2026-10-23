@@ -1006,7 +1006,14 @@ fun VicoCgmChart(
     val basalLimitSettings by dataStore.basalLimitSettingsResponse.observeAsState()
 
     // Fetch all chart data
-    val currentTimeSeconds = remember(timeRange) {
+    // La hora de "ahora" se recalcula al volver a la app/pantalla (ON_START) y al cambiar el rango.
+    // Antes solo se calculaba la primera vez y se quedaba parada.
+    var resumeTick by remember { mutableStateOf(0) }
+    com.jwoglom.controlx2.presentation.util.LifecycleStateObserver(
+        onStop = {},
+        onStart = { resumeTick++ }
+    )
+    val currentTimeSeconds = remember(timeRange, resumeTick) {
         previewData?.currentTimeSeconds ?: Instant.now().epochSecond
     }
     val rangeSeconds = timeRange.hours * 3600L
