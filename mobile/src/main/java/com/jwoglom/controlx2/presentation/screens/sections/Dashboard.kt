@@ -211,10 +211,14 @@ fun Dashboard(
                             value = System.currentTimeMillis() / 1000
                         }
                     }
-                    val cgmAgeMinutes = remember(cgmDeltaLogs?.value, cgmReading.value, cgmNowSeconds) {
-                        com.jwoglom.controlx2.presentation.screens.sections.components.cards.cgmAgeMinutes(
-                            cgmDeltaLogs?.value, cgmReading.value, cgmNowSeconds
-                        )
+                    // Edad segun la hora de la ultima lectura que dio la bomba (no el valor). Si aun no
+                    // hay, se usa el historial como respaldo.
+                    val cgmReadingTime = ds.cgmReadingTimeSeconds.observeAsState()
+                    val cgmAgeMinutes = remember(cgmReadingTime.value, cgmDeltaLogs?.value, cgmReading.value, cgmNowSeconds) {
+                        cgmReadingTime.value?.let { maxOf(0L, (cgmNowSeconds - it) / 60).toInt() }
+                            ?: com.jwoglom.controlx2.presentation.screens.sections.components.cards.cgmAgeMinutes(
+                                cgmDeltaLogs?.value, cgmReading.value, cgmNowSeconds
+                            )
                     }
                     val cgmDeltaMgdl = remember(cgmDeltaLogs?.value, cgmReading.value) {
                         com.jwoglom.controlx2.presentation.screens.sections.components.cards.cgmDeltaMgdl(
