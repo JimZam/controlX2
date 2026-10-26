@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -1798,7 +1799,13 @@ fun VicoCgmChart(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
-                                    .offset(y = CHART_TOP_INSET_DP.dp + plotHeight * fromTop - 8.dp)
+                                    .offset(y = CHART_TOP_INSET_DP.dp + plotHeight * fromTop)
+                                    // Centra el texto en su valor con su altura REAL (antes se
+                                    // suponian 16 dp, y con letra grande quedaba ~2-3 dp mas abajo)
+                                    .layout { measurable, constraints ->
+                                        val p = measurable.measure(constraints)
+                                        layout(p.width, p.height) { p.placeRelative(0, -p.height / 2) }
+                                    }
                             )
                         }
                     }
