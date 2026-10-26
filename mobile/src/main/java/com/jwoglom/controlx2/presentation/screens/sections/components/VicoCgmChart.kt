@@ -383,6 +383,8 @@ private const val CARB_LABEL_TEXT_SIZE_SP = 12f
 private const val CGM_CHART_HEIGHT_DP = 240
 private const val BASAL_CHART_HEIGHT_DP = 90
 private const val CHART_Y_AXIS_WIDTH_DP = 40
+// Hueco fijo arriba del grafico de glucosa para la etiqueta del marcador (3 lineas)
+private const val CHART_TOP_INSET_DP = 64f
 
 private data class BolusMarkerPoint(
     val markerTimestamp: Long,  // Snapped chart X position (timestamp in seconds)
@@ -524,19 +526,22 @@ private class IndicatorOnlyPersistentMarker(
 }
 
 /**
- * Envuelve el marcador que sale al arrastrar el dedo por el grafico y anula el espacio que
- * reserva arriba para su etiqueta (hora + glucosa, 2 lineas). Con ese espacio reservado, la
- * linea de glucosa se dibujaba comprimida hacia abajo (unos 40 mg/dL de desfase arriba) mientras
- * las etiquetas del eje Y, que se colocan a mano, no se movian.
+ * Envuelve el marcador que sale al arrastrar el dedo y fija el hueco que reserva arriba para su
+ * etiqueta (hora, glucosa e IOB: 3 lineas) en [CHART_TOP_INSET_DP]. Asi el hueco es un valor
+ * conocido y las etiquetas del eje Y se colocan con el mismo calculo. Antes el hueco dependia del
+ * tamano de la etiqueta (mas lineas = mas hueco) y la linea se comprimia sin que el eje lo supiera.
  */
-private class NoInsetMarker(private val base: CartesianMarker) : CartesianMarker by base {
+private class FixedTopInsetMarker(
+    private val base: CartesianMarker,
+    private val topInsetDp: Float
+) : CartesianMarker by base {
     override fun updateLayerMargins(
         context: CartesianMeasuringContext,
         layerMargins: CartesianLayerMargins,
         layerDimensions: CartesianLayerDimensions,
         model: CartesianChartModel
     ) {
-        // No reservar espacio: el grafico usa toda la altura y coincide con el eje Y.
+        layerMargins.ensureValuesAtLeast(top = with(context) { dpToPx(topInsetDp) })
     }
 }
 
@@ -1410,7 +1415,7 @@ fun VicoCgmChart(
         label = dragMarkerLabel,
         valueFormatter = markerValueFormatter
     )
-    val dragMarkerNoInset = remember(dragMarker) { NoInsetMarker(dragMarker) }
+    val dragMarkerNoInset = remember(dragMarker) { FixedTopInsetMarker(dragMarker, CHART_TOP_INSET_DP) }
     val cgmMarkerVisibilityListener = remember {
         object : CartesianMarkerVisibilityListener {
             override fun onShown(marker: CartesianMarker, targets: List<CartesianMarker.Target>) {
@@ -1775,20 +1780,27 @@ fun VicoCgmChart(
             Row(
                 modifier = Modifier.fillMaxSize()
             ) {
-                Column(
+                BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxHeight()
                         .width(CHART_Y_AXIS_WIDTH_DP.dp)
-                        .padding(end = 1.dp),
-                    verticalArrangement = Arrangement.SpaceBetween,
-                    horizontalAlignment = Alignment.End
+                        .padding(end = 1.dp)
                 ) {
-                    yAxisLabels.forEach { label ->
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    // Misma escala que la linea: 30..410 mg/dL sobre la altura libre (sin el hueco de arriba)
+                    val plotHeight = maxHeight - CHART_TOP_INSET_DP.dp
+                    val yAxisValues = listOf(400, 360, 320, 280, 240, 200, 160, 120, 80, 40)
+                    yAxisLabels.forEachIndexed { i, label ->
+                        if (label.isNotBlank()) {
+                            val fromTop = (fixedMaxGlucose - yAxisValues[i]) / fixedGlucoseSpan
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(y = CHART_TOP_INSET_DP.dp + plotHeight * fromTop - 8.dp)
+                            )
+                        }
                     }
                 }
 
