@@ -523,6 +523,23 @@ private class IndicatorOnlyPersistentMarker(
     }
 }
 
+/**
+ * Envuelve el marcador que sale al arrastrar el dedo por el grafico y anula el espacio que
+ * reserva arriba para su etiqueta (hora + glucosa, 2 lineas). Con ese espacio reservado, la
+ * linea de glucosa se dibujaba comprimida hacia abajo (unos 40 mg/dL de desfase arriba) mientras
+ * las etiquetas del eje Y, que se colocan a mano, no se movian.
+ */
+private class NoInsetMarker(private val base: CartesianMarker) : CartesianMarker by base {
+    override fun updateLayerMargins(
+        context: CartesianMeasuringContext,
+        layerMargins: CartesianLayerMargins,
+        layerDimensions: CartesianLayerDimensions,
+        model: CartesianChartModel
+    ) {
+        // No reservar espacio: el grafico usa toda la altura y coincide con el eje Y.
+    }
+}
+
 // Helper function to fetch and convert Bolus data
 @Composable
 private fun rememberBolusData(
@@ -1345,6 +1362,7 @@ fun VicoCgmChart(
     val axisTimeFormatter = remember {
         SimpleDateFormat("h:mm a", Locale.getDefault())
     }
+    val markerContext = LocalContext.current
     val markerValueFormatter = remember(glucoseUnit, glucoseValueByTimestamp) {
         DefaultCartesianMarker.ValueFormatter { _, targets ->
             val lineTarget = targets.filterIsInstance<LineCartesianLayerMarkerTarget>().firstOrNull()
@@ -1365,7 +1383,10 @@ fun VicoCgmChart(
                 GlucoseUnit.MGDL -> "$glucoseValue mg/dL"
                 GlucoseUnit.MMOL -> "${String.format("%.1f", glucoseValue * GlucoseConverter.MGDL_TO_MMOL_FACTOR)} mmol/L"
             }
-            "$timeText\n$glucoseText"
+            // IOB real de la bomba registrado en ese momento ("--" si no hay dato, p. ej. antes de instalar)
+            val iobAtTimestamp = com.jwoglom.controlx2.util.IobHistory.valueAt(markerContext, timestamp)
+            val iobText = if (iobAtTimestamp != null) String.format("%.2fu IOB", iobAtTimestamp) else "-- IOB"
+            "$timeText\n$glucoseText\n$iobText"
         }
     }
     val dragMarkerLabelColor = MaterialTheme.colorScheme.onSurface
@@ -1376,7 +1397,7 @@ fun VicoCgmChart(
             textSizeSp = 12f,
             textAlignment = Layout.Alignment.ALIGN_CENTER,
             lineHeightSp = null,
-            lineCount = 2,
+            lineCount = 3,
             truncateAt = null,
             margins = Insets(4f, 4f, 4f, 4f),
             padding = Insets(6f, 4f, 6f, 4f),
@@ -1389,6 +1410,7 @@ fun VicoCgmChart(
         label = dragMarkerLabel,
         valueFormatter = markerValueFormatter
     )
+    val dragMarkerNoInset = remember(dragMarker) { NoInsetMarker(dragMarker) }
     val cgmMarkerVisibilityListener = remember {
         object : CartesianMarkerVisibilityListener {
             override fun onShown(marker: CartesianMarker, targets: List<CartesianMarker.Target>) {
@@ -1783,7 +1805,7 @@ fun VicoCgmChart(
                     CartesianChartHost(
                         chart = rememberCartesianChart(
                             cgmLineLayer,
-                            marker = dragMarker,
+                            marker = dragMarkerNoInset,
                             markerVisibilityListener = cgmMarkerVisibilityListener,
                             persistentMarkers = persistentMarkers
                         ),
