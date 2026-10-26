@@ -487,6 +487,14 @@ class CommService : Service(), CommServiceCallbacks {
 
     override fun dispatchExternalMessage(message: com.jwoglom.pumpx2.pump.messages.Message) {
         xdripMessageDispatcher.onReceiveMessage(message)
+        // IOB real de la bomba, para mostrarlo al tocar el grafico
+        if (message is ControlIQIOBResponse) {
+            com.jwoglom.controlx2.util.IobHistory.record(
+                applicationContext,
+                Instant.now().epochSecond,
+                InsulinUnit.from1000To1(message.pumpDisplayedIOB)
+            )
+        }
         pumpSilenceMonitor.onMessage(message)
     }
 
