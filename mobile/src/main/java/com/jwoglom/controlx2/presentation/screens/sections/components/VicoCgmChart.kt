@@ -1837,11 +1837,12 @@ fun VicoCgmChart(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Solo cuando se arrastra sobre el grafico de basal: si no, el marcador de Vico ya
-                    // dibuja su propia linea y esta seria una segunda (una en el eje Y).
-                    if (hoverDrivenByBasal && hoveredBasalRatio != null) {
+                    // x exacto del marcador de Vico (coincide con su propia linea, asi no hay dos);
+                    // si se arrastra sobre la basal, se usa la proporcion de tiempo.
+                    if (hoveredBasalRatio != null) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
-                            val x = size.width * hoveredBasalRatio
+                            val x = if (!hoverDrivenByBasal && hoveredChartCanvasX != null) hoveredChartCanvasX!!
+                                else size.width * hoveredBasalRatio
                             drawLine(
                                 color = guidelineColor,
                                 start = androidx.compose.ui.geometry.Offset(x, 0f),
@@ -1958,7 +1959,8 @@ fun VicoCgmChart(
 
                 if (hoveredBasalRatio != null) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        val x = size.width * hoveredBasalRatio
+                        val x = if (!hoverDrivenByBasal && hoveredChartCanvasX != null) hoveredChartCanvasX!!
+                            else size.width * hoveredBasalRatio
                         drawLine(
                             color = guidelineColor,
                             start = androidx.compose.ui.geometry.Offset(x, 0f),
