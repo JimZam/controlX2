@@ -385,7 +385,7 @@ private const val CGM_CHART_HEIGHT_DP = 240
 private const val BASAL_CHART_HEIGHT_DP = 90
 private const val CHART_Y_AXIS_WIDTH_DP = 40
 // Hueco fijo arriba del grafico de glucosa para la etiqueta del marcador (3 lineas)
-private const val CHART_TOP_INSET_DP = 64f
+private const val CHART_TOP_INSET_DP = 80f
 
 private data class BolusMarkerPoint(
     val markerTimestamp: Long,  // Snapped chart X position (timestamp in seconds)
@@ -1190,7 +1190,7 @@ fun VicoCgmChart(
         buildBasalIntervals(startTimeSeconds, currentTimeSeconds, basalDataPoints)
     }
     val hoverContext = LocalContext.current
-    val hoveredGlucoseLabel = remember(hoveredChartTimestamp, glucoseValueByTimestamp, glucoseUnit) {
+    val hoveredGlucoseLabel = remember(hoveredChartTimestamp, glucoseValueByTimestamp, glucoseUnit, hoveredBasalDataPoint) {
         hoveredChartTimestamp?.let { timestamp ->
             val timeText = formatChartTimestamp(timestamp, SimpleDateFormat("h:mm a", Locale.getDefault()))
             // Lectura exacta o la mas cercana (max. 10 min); si no hay, "--" (la etiqueta nunca desaparece).
@@ -1205,7 +1205,8 @@ fun VicoCgmChart(
             }
             val iob = com.jwoglom.controlx2.util.IobHistory.valueAt(hoverContext, timestamp)
             val iobText = if (iob != null) String.format("%.2fu IOB", iob) else "-- IOB"
-            "$timeText\n$glucoseText\n$iobText"
+            val basalText = hoveredBasalDataPoint?.let { formatBasalRate(it.rate) } ?: "-- u/hr"
+            "$timeText\n$glucoseText\n$iobText\n$basalText"
         }
     }
     val hoveredBasalRatio = remember(hoveredChartTimestamp, startTimeSeconds, currentTimeSeconds) {
@@ -1424,7 +1425,7 @@ fun VicoCgmChart(
             textSizeSp = 12f,
             textAlignment = Layout.Alignment.ALIGN_CENTER,
             lineHeightSp = null,
-            lineCount = 3,
+            lineCount = 4,
             truncateAt = null,
             margins = Insets(4f, 4f, 4f, 4f),
             padding = Insets(6f, 4f, 6f, 4f),
@@ -2012,17 +2013,6 @@ fun VicoCgmChart(
                     }
                 }
 
-                if (hoveredBasalDataPoint != null) {
-                    Text(
-                        text = formatBasalRate(hoveredBasalDataPoint.rate),
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .centeredAtX(constraints.maxWidth * (hoveredBasalRatio ?: 0f))
-                            .padding(top = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
             }
         }
 
