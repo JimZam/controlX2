@@ -126,7 +126,7 @@ fun GlucoseHeroCard(
             ) {
                 if (!noCgmConnected && ageMinutes != null) {
                     Text(
-                        "${ageMinutes} min ",
+                        "${ageMinutes}min ",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -156,19 +156,21 @@ fun GlucoseHeroCard(
  * Variacion en mg/dL entre la lectura actual y la anterior, a partir del historial de la bomba.
  * Devuelve null si no hay dos lecturas cercanas (mas de 12 min entre ellas).
  */
-fun cgmDeltaMgdl(logs: List<HistoryLogItem>?, current: Int?): Int? {
+fun cgmDeltaMgdl(logs: List<HistoryLogItem>?, current: Int?, currentReadingSeconds: Long? = null): Int? {
     if (logs == null || current == null || current <= 0) return null
     val points = logs.mapNotNull { it.toCgmDataPoint() }.sortedByDescending { it.timestamp }
     if (points.isEmpty()) return null
     val latest = points[0]
-    // Si la lectura actual aun no esta en el historial, se compara con la ultima del historial.
+    // Si la lectura actual aun no esta en el historial, se compara con la ultima del historial,
+    // pero solo si es la lectura inmediatamente anterior (<= 7 min respecto a la actual). Antes se
+    // comparaba con una lectura de hace 10-12 min y salia +21 donde xDrip decia +9.
     if (current != latest.value.toInt()) {
-        return if (Math.abs(System.currentTimeMillis() / 1000 - latest.timestamp) <= 12 * 60) {
-            current - latest.value.toInt()
-        } else null
+        val ref = currentReadingSeconds ?: (System.currentTimeMillis() / 1000)
+        val gap = ref - latest.timestamp
+        return if (gap in 0..(7 * 60)) current - latest.value.toInt() else null
     }
     val previous = points.getOrNull(1) ?: return null
-    if (latest.timestamp - previous.timestamp > 12 * 60) return null
+    if (latest.timestamp - previous.timestamp > 7 * 60) return null
     return latest.value.toInt() - previous.value.toInt()
 }
 
