@@ -495,6 +495,22 @@ class CommService : Service(), CommServiceCallbacks {
                 InsulinUnit.from1000To1(message.pumpDisplayedIOB)
             )
         }
+        // Lecturas de glucosa en directo (con la hora real de la lectura), para delta y grafico
+        if (message is CurrentEGVGuiDataResponse && message.cgmReading > 0 && message.bgReadingTimestampSeconds.toLong() > 0L) {
+            try {
+                com.jwoglom.controlx2.util.CgmLiveHistory.record(
+                    applicationContext,
+                    com.jwoglom.controlx2.shared.util.pumpTimeToLocalTz(
+                        com.jwoglom.pumpx2.pump.messages.helpers.Dates.fromJan12008EpochSecondsToDate(
+                            message.bgReadingTimestampSeconds.toLong()
+                        )
+                    ).epochSecond,
+                    message.cgmReading
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "No se pudo guardar la lectura en directo")
+            }
+        }
         pumpSilenceMonitor.onMessage(message)
     }
 
