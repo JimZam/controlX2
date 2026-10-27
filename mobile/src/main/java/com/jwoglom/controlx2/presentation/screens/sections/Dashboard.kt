@@ -220,9 +220,18 @@ fun Dashboard(
                                 cgmDeltaLogs?.value, cgmReading.value, cgmNowSeconds
                             )
                     }
-                    val cgmDeltaMgdl = remember(cgmDeltaLogs?.value, cgmReading.value) {
-                        com.jwoglom.controlx2.presentation.screens.sections.components.cards.cgmDeltaMgdl(
-                            cgmDeltaLogs?.value, cgmReading.value
+                    // Variacion respecto a la lectura anterior guardada por el servicio (persistente)
+                    val dashContext = androidx.compose.ui.platform.LocalContext.current
+                    val liveDelta = remember(cgmReadingTime.value, cgmReading.value) {
+                        val t = cgmReadingTime.value
+                        val v = cgmReading.value
+                        if (t != null && v != null && v > 0) {
+                            com.jwoglom.controlx2.util.CgmLiveHistory.delta(dashContext, t, v)
+                        } else null
+                    }
+                    val cgmDeltaMgdl = remember(cgmDeltaLogs?.value, cgmReading.value, cgmReadingTime.value, liveDelta) {
+                        liveDelta ?: com.jwoglom.controlx2.presentation.screens.sections.components.cards.cgmDeltaMgdl(
+                            cgmDeltaLogs?.value, cgmReading.value, cgmReadingTime.value
                         )
                     }
                     Row(
