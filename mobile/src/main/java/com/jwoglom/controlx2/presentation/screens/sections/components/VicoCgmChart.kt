@@ -1379,10 +1379,13 @@ fun VicoCgmChart(
             }
             // entry.x is now a timestamp in seconds
             val timestamp = entry.x.toLong()
-            val glucoseAtTimestamp = glucoseValueByTimestamp[timestamp] ?: return@ValueFormatter ""
-            if (glucoseAtTimestamp <= 0.0) {
-                return@ValueFormatter ""
-            }
+            // Si justo ese instante no tiene lectura, usa la mas cercana (max. 10 min) en vez de
+            // devolver "" (antes la etiqueta, el IOB y la linea desaparecian).
+            val glucoseAtTimestamp = glucoseValueByTimestamp[timestamp]?.takeIf { it > 0.0 }
+                ?: glucoseValueByTimestamp.entries
+                    .filter { (it.value ?: 0.0) > 0.0 && Math.abs(it.key - timestamp) <= 600L }
+                    .minByOrNull { Math.abs(it.key - timestamp) }?.value
+                ?: return@ValueFormatter ""
             val timeText = formatChartTimestamp(timestamp, axisTimeFormatter)
             val glucoseValue = glucoseAtTimestamp.roundToInt()
             val glucoseText = when (glucoseUnit) {
@@ -1834,7 +1837,9 @@ fun VicoCgmChart(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    if (hoveredBasalRatio != null) {
+                    // Solo cuando se arrastra sobre el grafico de basal: si no, el marcador de Vico ya
+                    // dibuja su propia linea y esta seria una segunda (una en el eje Y).
+                    if (hoverDrivenByBasal && hoveredBasalRatio != null) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             val x = size.width * hoveredBasalRatio
                             drawLine(
