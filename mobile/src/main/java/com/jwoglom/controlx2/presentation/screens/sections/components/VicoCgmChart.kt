@@ -1855,18 +1855,22 @@ fun VicoCgmChart(
                     }
                     val guidelineColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
 
-                    CartesianChartHost(
-                        chart = rememberCartesianChart(
-                            cgmLineLayer,
-                            marker = dragMarkerNoInset,
-                            markerVisibilityListener = cgmMarkerVisibilityListener,
-                            persistentMarkers = persistentMarkers
-                        ),
-                        scrollState = cgmScrollState,
-                        consumeMoveEvents = true,
-                        modelProducer = cgmModelProducer,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    // Sin lecturas validas no se dibuja el grafico: el productor conservaba el modelo
+                    // anterior (otro rango) y mostraba lecturas viejas bajo "CGM data unavailable".
+                    if (hasValidCgmData) {
+                        CartesianChartHost(
+                            chart = rememberCartesianChart(
+                                cgmLineLayer,
+                                marker = dragMarkerNoInset,
+                                markerVisibilityListener = cgmMarkerVisibilityListener,
+                                persistentMarkers = persistentMarkers
+                            ),
+                            scrollState = cgmScrollState,
+                            consumeMoveEvents = true,
+                            modelProducer = cgmModelProducer,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
 
                     // x exacto del marcador de Vico (coincide con su propia linea, asi no hay dos);
                     // si se arrastra sobre la basal, se usa la proporcion de tiempo.
