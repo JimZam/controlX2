@@ -431,8 +431,17 @@ private fun rememberCgmChartData(
         (timeRange.hours * 60 / 5) + 20  // Extra buffer
     )?.observeAsState(emptyList())
 
-    return remember(cgmData?.value, timeRange) {
-        cgmData?.value?.mapNotNull { dao -> dao.toCgmDataPoint() }?.reversed() ?: emptyList()
+    val liveContext = LocalContext.current
+    // Clave de minuto: se recalcula al recomponer (p. ej. al entrar en la pantalla)
+    val minuteKey = System.currentTimeMillis() / 60_000L
+    return remember(cgmData?.value, timeRange, minuteKey) {
+        val fromHistory = cgmData?.value?.mapNotNull { dao -> dao.toCgmDataPoint() }?.reversed() ?: emptyList()
+        // Lecturas en directo que el historial de la bomba aun no tiene (a mas de 2 min de cualquier punto)
+        val since = System.currentTimeMillis() / 1000 - timeRange.hours * 3600L
+        val live = com.jwoglom.controlx2.util.CgmLiveHistory.since(liveContext, since)
+            .filter { (t, _) -> fromHistory.none { Math.abs(it.timestamp - t) <= 120L } }
+            .map { (t, v) -> CgmDataPoint(t, v.toFloat()) }
+        (fromHistory + live).sortedBy { it.timestamp }
     }
 }
 
