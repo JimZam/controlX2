@@ -669,6 +669,7 @@ class CommService : Service(), CommServiceCallbacks {
         var batteryPercent: Int? = null,
         var iobUnits: Double? = null,
         var cartridgeRemainingUnits: Int? = null,
+        var basalUnitsPerHour: Double? = null,
         var cgmReading: Int? = null,
         var cgmTrendArrow: String? = null,
     )
@@ -689,6 +690,11 @@ class CommService : Service(), CommServiceCallbacks {
             is ControlIQIOBResponse -> {
                 changed = currentPumpData.iobUnits != InsulinUnit.from1000To1(message.pumpDisplayedIOB)
                 currentPumpData.iobUnits = InsulinUnit.from1000To1(message.pumpDisplayedIOB)
+            }
+            is com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBasalStatusResponse -> {
+                val rate = InsulinUnit.from1000To1(message.currentBasalRate)
+                changed = currentPumpData.basalUnitsPerHour != rate
+                currentPumpData.basalUnitsPerHour = rate
             }
             is InsulinStatusResponse -> {
                 changed = currentPumpData.cartridgeRemainingUnits != message.currentInsulinAmount
@@ -909,26 +915,20 @@ class CommService : Service(), CommServiceCallbacks {
             title += " at ${shortTime(it)}"
         }
 
-        var contentText = ""
+        // Orden: glucosa y flecha, IOB, basal, bateria, cartucho
+        val sep = "\u00A0\u00A0\u00A0"
+        val parts = mutableListOf<String>()
         if (Prefs(applicationContext).showBGInNotification() && currentPumpData.cgmReading != null) {
             val glucoseUnit = Prefs(applicationContext).glucoseUnit() ?: GlucoseUnit.MGDL
             val bgText = GlucoseConverter.format(currentPumpData.cgmReading!!, glucoseUnit)
             val arrow = currentPumpData.cgmTrendArrow
-            contentText += if (arrow.isNullOrEmpty()) {
-                "BG: $bgText\u00A0\u00A0\u00A0"
-            } else {
-                "BG: $bgText $arrow\u00A0\u00A0\u00A0"
-            }
+            parts += if (arrow.isNullOrEmpty()) bgText else "$bgText $arrow"
         }
-        if (currentPumpData.batteryPercent != null) {
-            contentText += "Battery: ${currentPumpData.batteryPercent}%\u00A0\u00A0\u00A0"
-        }
-        if (currentPumpData.iobUnits != null) {
-            contentText += "IOB: ${currentPumpData.iobUnits}u\u00A0\u00A0\u00A0"
-        }
-        if (currentPumpData.cartridgeRemainingUnits != null) {
-            contentText += "Cartridge: ${currentPumpData.cartridgeRemainingUnits}u"
-        }
+        currentPumpData.iobUnits?.let { parts += "IOB: ${String.format(java.util.Locale.getDefault(), "%.2f", it)}u" }
+        currentPumpData.basalUnitsPerHour?.let { parts += "Basal: ${String.format(java.util.Locale.getDefault(), "%.2f", it)} u/hr" }
+        currentPumpData.batteryPercent?.let { parts += "Battery: $it%" }
+        currentPumpData.cartridgeRemainingUnits?.let { parts += "Cartridge: ${it}u" }
+        var contentText = parts.joinToString(sep)
         currentPumpData.connectionTime?.let {
             contentText += "    \nConnection established at: ${shortTime(it)}"
         }
