@@ -916,19 +916,24 @@ class CommService : Service(), CommServiceCallbacks {
         }
 
         // Orden: glucosa y flecha, IOB, basal, bateria, cartucho
-        val sep = "\u00A0\u00A0\u00A0"
-        val parts = mutableListOf<String>()
+        val longGap = "\u00A0\u00A0\u00A0"
+        val shortGap = "\u00A0"
+        val loc = java.util.Locale.getDefault()
+        var contentText = ""
+        // Cada dato lleva delante su separador (corto antes de IOB y de Basal, normal en el resto)
+        fun add(text: String, gapBefore: String) {
+            contentText += if (contentText.isEmpty()) text else gapBefore + text
+        }
         if (Prefs(applicationContext).showBGInNotification() && currentPumpData.cgmReading != null) {
             val glucoseUnit = Prefs(applicationContext).glucoseUnit() ?: GlucoseUnit.MGDL
             val bgText = GlucoseConverter.format(currentPumpData.cgmReading!!, glucoseUnit)
             val arrow = currentPumpData.cgmTrendArrow
-            parts += if (arrow.isNullOrEmpty()) bgText else "$bgText $arrow"
+            add(if (arrow.isNullOrEmpty()) bgText else "$bgText $arrow", longGap)
         }
-        currentPumpData.iobUnits?.let { parts += "IOB: ${String.format(java.util.Locale.getDefault(), "%.2f", it)}u" }
-        currentPumpData.basalUnitsPerHour?.let { parts += "Basal: ${String.format(java.util.Locale.getDefault(), "%.2f", it)} u/hr" }
-        currentPumpData.batteryPercent?.let { parts += "Battery: $it%" }
-        currentPumpData.cartridgeRemainingUnits?.let { parts += "Cartridge: ${it}u" }
-        var contentText = parts.joinToString(sep)
+        currentPumpData.iobUnits?.let { add("IOB: ${String.format(loc, "%.2f", it)}u", shortGap) }
+        currentPumpData.basalUnitsPerHour?.let { add("Basal: ${String.format(loc, "%.2f", it)} u/hr", shortGap) }
+        currentPumpData.batteryPercent?.let { add("Battery: $it%", longGap) }
+        currentPumpData.cartridgeRemainingUnits?.let { add("Cartridge: ${it}u", longGap) }
         currentPumpData.connectionTime?.let {
             contentText += "    \nConnection established at: ${shortTime(it)}"
         }
