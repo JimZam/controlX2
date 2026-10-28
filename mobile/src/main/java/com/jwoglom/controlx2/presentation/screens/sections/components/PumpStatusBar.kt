@@ -44,7 +44,6 @@ import com.jwoglom.controlx2.presentation.theme.SurfaceBackground
 private fun cartridgeWarnColor(units: Int?): Color = when {
     units == null -> Color.Unspecified
     units < 20 -> GlucoseColors.Low
-    units < 30 -> GlucoseColors.High
     units < 50 -> GlucoseColors.Elevated
     else -> Color.Unspecified
 }
