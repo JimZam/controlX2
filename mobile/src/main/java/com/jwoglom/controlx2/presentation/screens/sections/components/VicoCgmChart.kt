@@ -250,7 +250,7 @@ internal fun hoveredChartTimestampFromTargets(
 }
 
 internal fun formatBasalRate(rate: Float): String {
-    return "${String.format(Locale.US, "%.2f", rate).trimEnd('0').trimEnd('.')}u/hr"
+    return "${String.format(Locale.US, "%.2f", rate).trimEnd('0').trimEnd('.')}u/h"
 }
 
 private fun formatHoverGlucoseLabel(
@@ -1214,7 +1214,7 @@ fun VicoCgmChart(
             }
             val iob = com.jwoglom.controlx2.util.IobHistory.valueAt(hoverContext, timestamp)
             val iobText = if (iob != null) String.format("%.2fu IOB", iob) else "-- IOB"
-            val basalText = hoveredBasalDataPoint?.let { formatBasalRate(it.rate) } ?: "-- u/hr"
+            val basalText = hoveredBasalDataPoint?.let { formatBasalRate(it.rate) } ?: "-- u/h"
             "$timeText\n$glucoseText\n$iobText\n$basalText"
         }
     }
