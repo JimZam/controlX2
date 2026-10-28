@@ -1713,18 +1713,23 @@ fun VicoCgmChart(
             }
         }
         
-        val cgmLineRangeProvider = remember {
+        // Eje X fijo = todo el rango de tiempo (primer a ultimo bucket). Antes era "de la primera a la
+        // ultima lectura", asi que si faltaban lecturas al principio o al final (p. ej. en 24 h), la curva
+        // se estiraba y no coincidia con las horas del eje ni con la basal.
+        val fixedMinX = bucketTimes.first().toDouble()
+        val fixedMaxX = bucketTimes.last().toDouble()
+        val cgmLineRangeProvider = remember(fixedMinX, fixedMaxX) {
             object : CartesianLayerRangeProvider {
-                override fun getMinX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = minX
-                override fun getMaxX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = maxX
+                override fun getMinX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = fixedMinX
+                override fun getMaxX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = fixedMaxX
                 override fun getMinY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = fixedMinGlucose.toDouble()
                 override fun getMaxY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = fixedMaxGlucose.toDouble()
             }
         }
-        val basalLineRangeProvider = remember(basalMaxUnitsPerHour) {
+        val basalLineRangeProvider = remember(basalMaxUnitsPerHour, fixedMinX, fixedMaxX) {
             object : CartesianLayerRangeProvider {
-                override fun getMinX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = minX
-                override fun getMaxX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = maxX
+                override fun getMinX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = fixedMinX
+                override fun getMaxX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = fixedMaxX
                 override fun getMinY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = 0.0
                 override fun getMaxY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = basalMaxUnitsPerHour
             }
