@@ -931,7 +931,7 @@ class CommService : Service(), CommServiceCallbacks {
             add(if (arrow.isNullOrEmpty()) bgText else "$bgText $arrow", longGap)
         }
         currentPumpData.iobUnits?.let { add("IOB: ${String.format(loc, "%.2f", it)}u", shortGap) }
-        currentPumpData.basalUnitsPerHour?.let { add("Basal: ${String.format(loc, "%.2f", it)} u/hr", shortGap) }
+        currentPumpData.basalUnitsPerHour?.let { add("Basal: ${String.format(loc, "%.2f", it)} u/h", shortGap) }
         currentPumpData.batteryPercent?.let { add("Battery: $it%", longGap) }
         currentPumpData.cartridgeRemainingUnits?.let { add("Cartridge: ${it}u", longGap) }
         currentPumpData.connectionTime?.let {
