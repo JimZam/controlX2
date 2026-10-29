@@ -686,12 +686,22 @@ private fun rememberBasalData(
         ?: HistoryLogViewModel.estimateCurrentPumpTimeSec()
     val rangeSeconds = currentTimeSeconds - startTimeSeconds
     val minPumpTimeSec = currentPumpTimeSec - rangeSeconds - BASAL_LOOKBACK_SECONDS
-    val basalHistoryLogs = historyLogViewModel?.itemsForTypesSince(
-        basalClasses,
-        minPumpTimeSec
-    )?.observeAsState()
+    // La consulta se recreaba en cada recomposicion (minPumpTimeSec cambia cada segundo porque se
+    // estima con la hora actual), y la grafica podia quedarse sin datos hasta salir y volver a entrar.
+    // Se fija con una clave de 5 min y se conserva el ultimo resultado mientras llega el nuevo.
+    val basalQueryKey = minPumpTimeSec / 300L
+    val basalLiveData = remember(historyLogViewModel, basalQueryKey) {
+        historyLogViewModel?.itemsForTypesSince(basalClasses, basalQueryKey * 300L)
+    }
+    val lastBasalLogs = remember { mutableStateOf<List<HistoryLogItem>?>(null) }
+    val basalHistoryLogs = basalLiveData?.observeAsState(lastBasalLogs.value)
+    androidx.compose.runtime.SideEffect {
+        basalHistoryLogs?.value?.let { lastBasalLogs.value = it }
+    }
 
-    val basalChartData = remember(basalHistoryLogs?.value, timeRange, startTimeSeconds, currentTimeSeconds) {
+    val basalLiveContext = LocalContext.current
+    val basalMinuteKey = System.currentTimeMillis() / 60_000L
+    val basalChartData = remember(basalHistoryLogs?.value, timeRange, startTimeSeconds, currentTimeSeconds, basalMinuteKey) {
         val rawLogs = basalHistoryLogs?.value ?: emptyList()
         val lookbackStartTimeSeconds = startTimeSeconds - BASAL_LOOKBACK_SECONDS
         val events = mutableListOf<BasalDataPoint>()
@@ -796,11 +806,18 @@ private fun rememberBasalData(
             }
         }
 
+        val historyEvents = events
+            .filter { it.timestamp in lookbackStartTimeSeconds..currentTimeSeconds }
+            .distinctBy { Triple(it.timestamp, it.rate, it.isTemp) }
+            .sortedBy { it.timestamp }
+        // Basal en directo posterior al ultimo registro del historial (que llega con retraso)
+        val lastHistoryTs = historyEvents.maxOfOrNull { it.timestamp } ?: 0L
+        val liveEvents = com.jwoglom.controlx2.util.BasalLiveHistory.since(basalLiveContext, lookbackStartTimeSeconds)
+            .filter { it.first > lastHistoryTs && it.first <= currentTimeSeconds }
+            .map { BasalDataPoint(timestamp = it.first, rate = it.second.toFloat(), isTemp = false, duration = null) }
+
         BasalChartData(
-            events = events
-                .filter { it.timestamp in lookbackStartTimeSeconds..currentTimeSeconds }
-                .distinctBy { Triple(it.timestamp, it.rate, it.isTemp) }
-                .sortedBy { it.timestamp },
+            events = historyEvents + liveEvents,
             rawLogCount = rawLogs.size,
             parseFailureCount = parseFailureCount,
             sampleFailureSeqIds = sampleFailureSeqIds,
