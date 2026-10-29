@@ -174,6 +174,8 @@ class CommService : Service(), CommServiceCallbacks {
                 CurrentBatteryRequestBuilder.create(apiVersion()),
                 ControlIQIOBRequest(),
                 InsulinStatusRequest(),
+                // Basal que la bomba esta administrando ahora (incluye los ajustes de Control-IQ)
+                com.jwoglom.pumpx2.pump.messages.request.currentStatus.CurrentBasalStatusRequest(),
                 CurrentEGVGuiDataRequest(),
                 HomeScreenMirrorRequest(),
                 HistoryLogStatusRequest()
@@ -493,6 +495,13 @@ class CommService : Service(), CommServiceCallbacks {
                 applicationContext,
                 Instant.now().epochSecond,
                 InsulinUnit.from1000To1(message.pumpDisplayedIOB)
+            )
+        }
+        // Basal en directo, para el grafico y el texto al tocar
+        if (message is com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBasalStatusResponse) {
+            com.jwoglom.controlx2.util.BasalLiveHistory.record(
+                applicationContext,
+                InsulinUnit.from1000To1(message.currentBasalRate)
             )
         }
         // Lecturas de glucosa en directo (con la hora real de la lectura), para delta y grafico
